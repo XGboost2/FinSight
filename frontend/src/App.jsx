@@ -5,6 +5,7 @@ import CompanySearch from './components/CompanySearch'
 import Dashboard from './components/Dashboard'
 import CompareView from './components/CompareView'
 import FilingPanel from './components/FilingPanel'
+import StatusDots from './components/StatusDots'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -118,6 +119,8 @@ export default function App() {
             <span className="ticker-co">{primary.name}</span>
           </div>
         )}
+
+        <StatusDots />
       </header>
 
       <main className={`layout ${showCompare ? 'layout-full' : ''}`}>

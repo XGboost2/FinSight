@@ -123,3 +123,4 @@ class HealthResponse(BaseModel):
     version: str = "0.2.0"
     filings_loaded: int = 0
     redis_ok: bool = False
+    qdrant_ok: bool = False

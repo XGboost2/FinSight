@@ -358,10 +358,25 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     redis_ok = False
+    qdrant_ok = False
+
     try:
         redis = get_redis()
         redis.ping()
         redis_ok = True
     except Exception as e:
         logger.warning("Health check: Redis unavailable — %s", e)
-    return HealthResponse(filings_loaded=get_filing_count(), redis_ok=redis_ok)
+
+    try:
+        from qdrant_client import QdrantClient
+        qc = QdrantClient(url=get_settings().QDRANT_URL)
+        qc.get_collections()
+        qdrant_ok = True
+    except Exception as e:
+        logger.warning("Health check: Qdrant unavailable — %s", e)
+
+    return HealthResponse(
+        filings_loaded=get_filing_count(),
+        redis_ok=redis_ok,
+        qdrant_ok=qdrant_ok,
+    )
