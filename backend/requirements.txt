@@ -10,7 +10,7 @@ python-dotenv>=1.0.0
 
 # RAG — Day 14
 qdrant-client>=1.9.0
-sentence-transformers>=3.0.0
+fastembed>=0.3.6
 
 # Cache + Scheduler — Day 15
 redis>=5.0.0

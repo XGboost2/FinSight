@@ -1,45 +1,42 @@
 """
-Embedder — text to vectors using sentence-transformers (local, free).
+Embedder — text to vectors using fastembed (local, ONNX, no torch).
 
 Model: BAAI/bge-base-en-v1.5
-  - 440MB, runs on CPU, no API key needed
-  - 768-dim vectors (vs 384 for MiniLM) — richer semantic representation
+  - ~90MB ONNX model (vs 440MB torch), runs on CPU
+  - 768-dim vectors — richer semantic representation
   - Top of MTEB retrieval benchmarks for English financial/legal text
 
 Asymmetric retrieval (BGE-specific):
-  Documents are embedded as-is at ingest time.
-  Queries get a prefix instruction at search time — this is how BGE is designed
-  to work and gives measurably better retrieval than embedding both the same way.
+  Documents use embed(), queries use query_embed() — fastembed applies
+  the BGE instruction prefix internally for query_embed.
 """
 
 import logging
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "BAAI/bge-base-en-v1.5"
 VECTOR_DIM = 768
-QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
-_model: SentenceTransformer | None = None
+_model: TextEmbedding | None = None
 
 
-def get_model() -> SentenceTransformer:
+def get_model() -> TextEmbedding:
     global _model
     if _model is None:
         logger.info("Loading embedding model %s (first load, ~5s)", MODEL_NAME)
-        _model = SentenceTransformer(MODEL_NAME)
+        _model = TextEmbedding(MODEL_NAME)
     return _model
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    """Embed filing chunks at ingest time. No prefix — documents embed as-is."""
+    """Embed filing chunks at ingest time."""
     if not texts:
         return []
-    return get_model().encode(texts, convert_to_numpy=True, show_progress_bar=False).tolist()
+    return [vec.tolist() for vec in get_model().embed(texts)]
 
 
 def embed_query(question: str) -> list[float]:
-    """Embed a search query with BGE's instruction prefix for better retrieval."""
-    prefixed = QUERY_INSTRUCTION + question
-    return get_model().encode([prefixed], convert_to_numpy=True, show_progress_bar=False)[0].tolist()
+    """Embed a search query — fastembed applies BGE instruction prefix internally."""
+    return next(get_model().query_embed([question])).tolist()

@@ -75,9 +75,9 @@ def upsert_chunks(filing_id: str, chunks: list[dict], embeddings: list[list[floa
 def search(query_vector: list[float], filing_id: str, top_k: int = 5) -> list[dict]:
     """Find the top-k chunks most semantically similar to the query."""
     client = _client()
-    hits = client.search(
+    result = client.query_points(
         collection_name=COLLECTION,
-        query_vector=query_vector,
+        query=query_vector,
         query_filter=Filter(
             must=[FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
         ),
@@ -91,5 +91,5 @@ def search(query_vector: list[float], filing_id: str, top_k: int = 5) -> list[di
             "section": hit.payload.get("section", ""),
             "score": round(hit.score, 4),
         }
-        for hit in hits
+        for hit in result.points
     ]
