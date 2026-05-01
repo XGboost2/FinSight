@@ -57,8 +57,10 @@ router = APIRouter(prefix="/api", tags=["FinSight"])
 @router.get("/companies/search", response_model=SearchResponse)
 async def search_companies(q: str = Query(..., min_length=1)) -> SearchResponse:
     """Search companies by name or ticker. Pure Redis, zero API calls."""
+    logger.info("Company search: q=%r", q)
     redis = get_redis()
     results = search_tickers(redis, q, limit=8)
+    logger.info("Company search: q=%r → %d results", q, len(results))
     return SearchResponse(
         results=[CompanyInfo(**r) for r in results],
         total=len(results),
@@ -67,10 +69,13 @@ async def search_companies(q: str = Query(..., min_length=1)) -> SearchResponse:
 
 @router.get("/companies/{ticker}/info", response_model=CompanyInfo)
 async def get_company_info(ticker: str) -> CompanyInfo:
+    logger.info("Company info request: %s", ticker)
     redis = get_redis()
     info = get_ticker_info(redis, ticker)
     if not info:
+        logger.warning("Company info not found: %s", ticker)
         raise HTTPException(404, f"Ticker '{ticker}' not found in Redis. Cache may be loading.")
+    logger.info("Company info found: %s → %s", ticker, info.get("name", ""))
     return CompanyInfo(**info)
 
 
@@ -85,6 +90,7 @@ async def _run_ingest(ticker: str) -> dict:
     if is_ingested(redis, ticker):
         record = get_filing_record(redis, ticker)
         filing = get_filing_by_ticker(ticker)
+        logger.info("Ingest skipped (already exists): %s chunks=%d", ticker, record["chunk_count"])
         return {
             "ticker": ticker,
             "filing_id": record["filing_id"],
@@ -94,8 +100,10 @@ async def _run_ingest(ticker: str) -> dict:
             "filed_date": record.get("filed_date", ""),
         }
 
+    logger.info("Ingest start: %s", ticker)
     result = await fetch_and_extract(ticker, "10-K")
     if not result:
+        logger.warning("Ingest: no 10-K found for %s", ticker)
         raise HTTPException(404, f"No 10-K filing found for '{ticker}'")
 
     chunks = chunk_text(
@@ -105,6 +113,7 @@ async def _run_ingest(ticker: str) -> dict:
         source_id=result["id"],
     )
     if not chunks:
+        logger.error("Ingest: chunking produced 0 chunks for %s", ticker)
         raise HTTPException(422, "Filing text could not be chunked")
 
     store_filing(result["id"], result, chunks)
@@ -117,6 +126,10 @@ async def _run_ingest(ticker: str) -> dict:
 
     await get_or_extract_dashboard(redis, ticker, result["id"], chunks)
 
+    logger.info(
+        "Ingest complete: %s filing_id=%s chunks=%d filed=%s",
+        ticker, result["id"], len(chunks), result.get("filed_date", ""),
+    )
     return {
         "ticker": ticker,
         "filing_id": result["id"],
@@ -135,7 +148,7 @@ async def ingest_company(ticker: str) -> IngestResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Ingest failed for %s: %s", ticker, e)
+        logger.error("Ingest failed for %s: %s", ticker, e, exc_info=True)
         raise HTTPException(502, f"Ingest failed: {e}")
     return IngestResponse(**data)
 
@@ -147,9 +160,11 @@ async def ingest_company(ticker: str) -> IngestResponse:
 async def get_dashboard(ticker: str) -> DashboardResponse:
     """Return cached dashboard metrics. Triggers extraction if cache expired."""
     ticker = ticker.upper()
+    logger.info("Dashboard request: %s", ticker)
     redis = get_redis()
 
     if not is_ingested(redis, ticker):
+        logger.warning("Dashboard: %s not ingested", ticker)
         raise HTTPException(404, f"No filing for '{ticker}'. Call /ingest first.")
 
     record = get_filing_record(redis, ticker)
@@ -157,6 +172,7 @@ async def get_dashboard(ticker: str) -> DashboardResponse:
     fallback = filing.get("chunks", []) if filing else []
 
     metrics = await get_or_extract_dashboard(redis, ticker, record["filing_id"], fallback)
+    logger.info("Dashboard served: %s", ticker)
     return DashboardResponse(**{k: v for k, v in metrics.items() if k != "ticker"}, ticker=ticker)
 
 
@@ -170,6 +186,7 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
         raise HTTPException(400, "Exactly 2 tickers required")
 
     t1, t2 = request.tickers[0].upper(), request.tickers[1].upper()
+    logger.info("Comparison request: %s vs %s", t1, t2)
     redis = get_redis()
 
     try:
@@ -178,6 +195,7 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
     except HTTPException:
         raise
     except Exception as e:
+        logger.error("Ingest failed during comparison %s vs %s: %s", t1, t2, e, exc_info=True)
         raise HTTPException(502, f"Ingest failed during comparison: {e}")
 
     metrics1 = await get_or_extract_dashboard(redis, t1, data1["filing_id"])
@@ -186,6 +204,7 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
     result = await get_or_generate_comparison(
         redis, t1, t2, data1["filing_id"], data2["filing_id"], metrics1, metrics2
     )
+    logger.info("Comparison complete: %s vs %s", t1, t2)
     return CompareResponse(**result)
 
 
@@ -195,8 +214,10 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
 @router.post("/admin/refresh-tickers")
 async def refresh_tickers() -> dict:
     """Manually trigger ticker cache refresh (normally runs at 2am UTC)."""
+    logger.info("Manual ticker refresh triggered")
     redis = get_redis()
     count = await load_tickers_into_redis(redis)
+    logger.info("Ticker refresh complete: %d companies loaded", count)
     return {"loaded": count, "message": f"Refreshed {count} tickers into Redis"}
 
 
@@ -205,24 +226,30 @@ async def refresh_tickers() -> dict:
 
 @router.post("/filings/fetch", response_model=FilingResponse)
 async def fetch_filing(request: FetchFilingRequest) -> FilingResponse:
-    logger.info("Fetching %s filing for %s", request.filing_type, request.ticker)
+    logger.info("Fetch filing: ticker=%s type=%s", request.ticker, request.filing_type)
 
     try:
         result = await fetch_and_extract(request.ticker, request.filing_type)
     except Exception as e:
-        logger.error("EDGAR fetch failed for %s: %s", request.ticker, e)
+        logger.error("EDGAR fetch failed for %s: %s", request.ticker, e, exc_info=True)
         raise HTTPException(502, f"SEC EDGAR fetch failed: {e}")
 
     if not result:
+        logger.warning("No %s found for %s", request.filing_type, request.ticker)
         raise HTTPException(404, f"No {request.filing_type} found for '{request.ticker}'")
 
     chunks = chunk_text(text=result["text"], chunk_size=1000, chunk_overlap=200, source_id=result["id"])
     if not chunks:
+        logger.error("Chunking failed for %s", request.ticker)
         raise HTTPException(422, "Filing text could not be chunked")
 
     store_filing(result["id"], result, chunks)
     rag_ingest(result["id"], chunks)
 
+    logger.info(
+        "Filing fetched and ingested: ticker=%s id=%s chunks=%d",
+        request.ticker, result["id"], len(chunks),
+    )
     return FilingResponse(
         success=True,
         filing=FilingInfo(
@@ -241,6 +268,7 @@ async def fetch_filing(request: FetchFilingRequest) -> FilingResponse:
 @router.get("/filings", response_model=FilingListResponse)
 async def get_filings() -> FilingListResponse:
     filings_data = list_filings()
+    logger.info("Filings list: %d total", len(filings_data))
     filings = [
         FilingInfo(
             id=f["id"],
@@ -258,9 +286,12 @@ async def get_filings() -> FilingListResponse:
 
 @router.get("/filings/{filing_id}")
 async def get_filing_detail(filing_id: str) -> FilingResponse:
+    logger.info("Filing detail request: %s", filing_id)
     data = get_filing(filing_id)
     if not data:
+        logger.warning("Filing not found: %s", filing_id)
         raise HTTPException(404, "Filing not found")
+    logger.info("Filing detail served: %s ticker=%s", filing_id, data.get("ticker", ""))
     return FilingResponse(
         success=True,
         filing=FilingInfo(
@@ -277,8 +308,10 @@ async def get_filing_detail(filing_id: str) -> FilingResponse:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
+    logger.info("Chat request: ticker=%s question=%r", request.ticker, request.question[:80])
     filing = get_filing_by_ticker(request.ticker)
     if not filing:
+        logger.warning("Chat: no filing for %s", request.ticker)
         raise HTTPException(404, f"No filing for '{request.ticker}'. Ingest first.")
     filing_id = filing["id"]
 
@@ -293,8 +326,18 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         llm_result = await ask_llm(request.question, context)
     except Exception as e:
-        logger.error("LLM call failed: %s", e)
+        logger.error("LLM call failed for ticker=%s: %s", request.ticker, e, exc_info=True)
         raise HTTPException(502, f"LLM call failed: {e}")
+
+    logger.info(
+        "Chat complete: ticker=%s model=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
+        request.ticker,
+        llm_result["model_used"],
+        llm_result["tokens_in"],
+        llm_result["tokens_out"],
+        llm_result["cost_usd"],
+        llm_result["latency_ms"],
+    )
 
     sources = [
         SourceChunk(chunk_index=c["chunk_index"], text_preview=c["text"][:200])
@@ -319,6 +362,6 @@ async def health() -> HealthResponse:
         redis = get_redis()
         redis.ping()
         redis_ok = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Health check: Redis unavailable — %s", e)
     return HealthResponse(filings_loaded=get_filing_count(), redis_ok=redis_ok)

@@ -1,40 +1,39 @@
 """FinSight AI — FastAPI entry point."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from cache.redis_client import get_redis
 from cache.ticker_cache import load_tickers_into_redis, TICKERS_KEY
 from config import get_settings
 from jobs.refresh_tickers import refresh_ticker_index
 from api.routes import router as api_router
+from logging_config import setup_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logger.info("🚀 FinSight AI starting up (env=%s)", settings.ENVIRONMENT)
-    logger.info("   LLM: Anthropic=%s OpenAI=%s",
-                "✅" if settings.ANTHROPIC_API_KEY else "❌",
-                "✅" if settings.OPENAI_API_KEY else "❌")
+    logger.info("FinSight AI starting up (env=%s)", settings.ENVIRONMENT)
+    logger.info("LLM: Anthropic=%s OpenAI=%s",
+                "ok" if settings.ANTHROPIC_API_KEY else "missing",
+                "ok" if settings.OPENAI_API_KEY else "missing")
 
     scheduler = AsyncIOScheduler()
 
     try:
         redis = get_redis()
         if not redis.exists(TICKERS_KEY):
-            logger.info("Ticker cache empty — loading ~13k companies from SEC EDGAR...")
+            logger.info("Ticker cache empty — loading companies from SEC EDGAR")
             count = await load_tickers_into_redis(redis)
             logger.info("Loaded %d companies into Redis", count)
         else:
@@ -42,14 +41,14 @@ async def lifespan(app: FastAPI):
 
         scheduler.add_job(refresh_ticker_index, "cron", hour=2, args=[redis])
         scheduler.start()
-        logger.info("Ticker refresh scheduled at 2am UTC daily")
+        logger.info("Ticker refresh scheduled at 02:00 UTC daily")
     except Exception as e:
         logger.error("Redis startup failed (search unavailable): %s", e)
 
     yield
 
     scheduler.shutdown(wait=False)
-    logger.info("👋 FinSight AI shutting down")
+    logger.info("FinSight AI shutting down")
 
 
 app = FastAPI(
@@ -66,6 +65,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.info(
+        "%s %s → %d (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+    )
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception: %s %s — %s: %s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 app.include_router(api_router)
 

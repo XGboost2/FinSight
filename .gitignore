@@ -55,6 +55,10 @@ Icon
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
 
+# Logs
+logs/
+*.log
+
 # IDE
 .vscode/
 .idea/
