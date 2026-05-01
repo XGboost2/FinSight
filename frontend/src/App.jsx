@@ -1,86 +1,79 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState } from 'react'
 import axios from 'axios'
-import { TrendingUp, Search } from 'lucide-react'
-import StockChart from './components/StockChart'
+import { TrendingUp, GitCompare, X } from 'lucide-react'
+import CompanySearch from './components/CompanySearch'
+import Dashboard from './components/Dashboard'
+import CompareView from './components/CompareView'
 import FilingPanel from './components/FilingPanel'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const AV_KEY = import.meta.env.VITE_ALPHA_VANTAGE_KEY || 'demo'
+
+async function ingestAndDashboard(ticker) {
+  const { data: ingest } = await axios.post(`${API_URL}/api/companies/${ticker}/ingest`)
+  const { data: dash } = await axios.get(`${API_URL}/api/companies/${ticker}/dashboard`)
+  return { ingest, dashboard: dash }
+}
 
 export default function App() {
-  const [query, setQuery] = useState('')
-  const [suggestions, setSuggestions] = useState([])
-  const [suggLoading, setSuggLoading] = useState(false)
+  const [primary, setPrimary] = useState(null)       // {ticker, name, cik}
+  const [primaryFiling, setPrimaryFiling] = useState(null)
+  const [primaryDash, setPrimaryDash] = useState(null)
+  const [primaryLoading, setPrimaryLoading] = useState(false)
+  const [primaryError, setPrimaryError] = useState(null)
 
-  const [ticker, setTicker] = useState(null)
-  const [companyName, setCompanyName] = useState('')
-  const [filing, setFiling] = useState(null)
-  const [filingId, setFilingId] = useState(null)
-  const [fetchingFiling, setFetchingFiling] = useState(false)
-  const [filingError, setFilingError] = useState(null)
+  const [compareMode, setCompareMode] = useState(false)
+  const [compareCompany, setCompareCompany] = useState(null)
+  const [comparison, setComparison] = useState(null)
+  const [compareLoading, setCompareLoading] = useState(false)
+  const [compareError, setCompareError] = useState(null)
 
-  const debounceRef = useRef(null)
-
-  const searchSuggestions = useCallback(async (kw) => {
-    if (kw.length < 2) { setSuggestions([]); return }
-    setSuggLoading(true)
-    try {
-      const res = await fetch(
-        `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${encodeURIComponent(kw)}&apikey=${AV_KEY}`
-      )
-      const json = await res.json()
-      setSuggestions((json.bestMatches || []).slice(0, 6))
-    } catch {
-      setSuggestions([])
-    } finally {
-      setSuggLoading(false)
-    }
-  }, [])
-
-  const handleQueryChange = (e) => {
-    const val = e.target.value
-    setQuery(val)
-    clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => searchSuggestions(val), 300)
-  }
-
-  const selectCompany = async (sym, name) => {
-    setTicker(sym)
-    setCompanyName(name)
-    setQuery(name)
-    setSuggestions([])
-    setFiling(null)
-    setFilingId(null)
-    setFilingError(null)
-    setFetchingFiling(true)
+  const handleSelectPrimary = async (company) => {
+    setPrimary(company)
+    setPrimaryFiling(null)
+    setPrimaryDash(null)
+    setPrimaryError(null)
+    setPrimaryLoading(true)
+    setComparison(null)
+    setCompareCompany(null)
 
     try {
-      const { data } = await axios.post(`${API_URL}/api/filings/fetch`, {
-        ticker: sym,
-        filing_type: '10-K',
-      })
-      if (data.success && data.filing) {
-        setFiling(data.filing)
-        setFilingId(data.filing.id)
-      }
+      const { ingest, dashboard } = await ingestAndDashboard(company.ticker)
+      setPrimaryFiling(ingest)
+      setPrimaryDash(dashboard)
     } catch (e) {
-      setFilingError(e.response?.data?.detail || 'Failed to fetch 10-K from SEC EDGAR.')
+      setPrimaryError(e.response?.data?.detail || 'Failed to load filing.')
     } finally {
-      setFetchingFiling(false)
+      setPrimaryLoading(false)
     }
   }
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && suggestions.length > 0) {
-      const top = suggestions[0]
-      selectCompany(top['1. symbol'], top['2. name'])
+  const handleSelectCompare = async (company) => {
+    if (!primary) return
+    setCompareCompany(company)
+    setComparison(null)
+    setCompareError(null)
+    setCompareLoading(true)
+
+    try {
+      const { data } = await axios.post(`${API_URL}/api/companies/compare`, {
+        tickers: [primary.ticker, company.ticker],
+      })
+      setComparison(data)
+    } catch (e) {
+      setCompareError(e.response?.data?.detail || 'Comparison failed.')
+    } finally {
+      setCompareLoading(false)
     }
-    if (e.key === 'Escape') setSuggestions([])
   }
 
-  const closeSuggestions = (e) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) setSuggestions([])
+  const exitCompare = () => {
+    setCompareMode(false)
+    setCompareCompany(null)
+    setComparison(null)
+    setCompareError(null)
   }
+
+  const showCompare = compareMode && (compareLoading || comparison || compareError)
 
   return (
     <div className="app">
@@ -90,61 +83,77 @@ export default function App() {
           <span>FinSight</span>
         </div>
 
-        <div className="search-container" onBlur={closeSuggestions}>
-          <div className="search-box">
-            <Search size={15} className="search-icon" />
-            <input
-              type="text"
-              value={query}
-              onChange={handleQueryChange}
-              onKeyDown={handleKeyDown}
-              placeholder="Search company (e.g. Apple Inc, Tesla…)"
-              className="search-input"
+        <CompanySearch
+          onSelect={handleSelectPrimary}
+          placeholder="Search company (e.g. Apple, AAPL)…"
+        />
+
+        {primary && !compareMode && (
+          <button
+            className="btn-compare"
+            onClick={() => setCompareMode(true)}
+            title="Compare with another company"
+          >
+            <GitCompare size={14} />
+            Compare
+          </button>
+        )}
+
+        {compareMode && (
+          <>
+            <span className="compare-vs">vs</span>
+            <CompanySearch
+              onSelect={handleSelectCompare}
+              placeholder="Add company to compare…"
             />
-            {suggLoading && <div className="search-spinner" />}
-          </div>
+            <button className="btn-icon" onClick={exitCompare} title="Exit compare mode">
+              <X size={16} />
+            </button>
+          </>
+        )}
 
-          {suggestions.length > 0 && (
-            <ul className="suggestions" tabIndex={-1}>
-              {suggestions.map(s => (
-                <li
-                  key={s['1. symbol']}
-                  className="suggestion-item"
-                  tabIndex={0}
-                  onClick={() => selectCompany(s['1. symbol'], s['2. name'])}
-                  onKeyDown={e => e.key === 'Enter' && selectCompany(s['1. symbol'], s['2. name'])}
-                >
-                  <span className="sugg-sym">{s['1. symbol']}</span>
-                  <span className="sugg-name">{s['2. name']}</span>
-                  <span className="sugg-region">{s['4. region']}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {ticker && (
+        {primary && (
           <div className="active-ticker">
-            <span className="ticker-sym">{ticker}</span>
-            <span className="ticker-co">{companyName}</span>
+            <span className="ticker-sym">{primary.ticker}</span>
+            <span className="ticker-co">{primary.name}</span>
           </div>
         )}
       </header>
 
-      <main className="layout">
-        <section className="chart-col">
-          <StockChart ticker={ticker} />
-          {filingError && <div className="alert-error">{filingError}</div>}
-        </section>
-        <aside className="filing-col">
-          <FilingPanel
-            ticker={ticker}
-            companyName={companyName}
-            filingId={filingId}
-            filing={filing}
-            fetchingFiling={fetchingFiling}
+      <main className={`layout ${showCompare ? 'layout-full' : ''}`}>
+        {showCompare ? (
+          <CompareView
+            comparison={comparison}
+            loading={compareLoading}
+            error={compareError}
+            onBack={exitCompare}
           />
-        </aside>
+        ) : (
+          <>
+            <section className="chart-col">
+              <Dashboard
+                company={primary}
+                dashboard={primaryDash}
+                loading={primaryLoading}
+                error={primaryError}
+              />
+            </section>
+            <aside className="filing-col">
+              <FilingPanel
+                ticker={primary?.ticker ?? null}
+                companyName={primary?.name ?? ''}
+                filingId={primaryFiling?.filing_id ?? null}
+                filing={primaryFiling ? {
+                  company_name: primary?.name,
+                  filing_type: '10-K',
+                  filed_date: primaryFiling.filed_date,
+                  chunk_count: primaryFiling.chunk_count,
+                } : null}
+                fetchingFiling={primaryLoading}
+              />
+            </aside>
+          </>
+        )}
       </main>
     </div>
   )

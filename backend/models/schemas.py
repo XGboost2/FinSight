@@ -7,16 +7,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-# === Filing Models ===
+# === Filing Models (legacy — keep for /api/filings/* endpoints) ===
 
 class FetchFilingRequest(BaseModel):
-    """Request to fetch and ingest a 10-K filing."""
-    ticker: str = Field(..., min_length=1, max_length=10, description="Stock ticker symbol (e.g. AAPL)")
-    filing_type: str = Field(default="10-K", description="SEC filing type")
+    ticker: str = Field(..., min_length=1, max_length=10)
+    filing_type: str = Field(default="10-K")
 
 
 class ChunkInfo(BaseModel):
-    """A single text chunk from a filing."""
     id: str
     text: str
     chunk_index: int
@@ -25,26 +23,23 @@ class ChunkInfo(BaseModel):
 
 
 class FilingInfo(BaseModel):
-    """Metadata for an ingested filing."""
     id: str
     ticker: str
     company_name: str = ""
     filing_type: str
     filed_date: str = ""
     chunk_count: int
-    status: str = "ready"  # fetching | chunking | ready | error
+    status: str = "ready"
     ingested_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class FilingResponse(BaseModel):
-    """API response for filing operations."""
     success: bool
     filing: FilingInfo | None = None
     message: str = ""
 
 
 class FilingListResponse(BaseModel):
-    """API response for listing all filings."""
     filings: list[FilingInfo]
     total: int
 
@@ -52,19 +47,16 @@ class FilingListResponse(BaseModel):
 # === Chat Models ===
 
 class ChatRequest(BaseModel):
-    """Request to ask a question about a filing."""
-    question: str = Field(..., min_length=1, max_length=2000, description="Your question about the filing")
-    filing_id: str = Field(..., description="ID of the ingested filing to query")
+    question: str = Field(..., min_length=1, max_length=2000)
+    ticker: str = Field(..., min_length=1, max_length=10)
 
 
 class SourceChunk(BaseModel):
-    """A source chunk cited in the answer."""
     chunk_index: int
-    text_preview: str = Field(..., description="First 200 chars of the chunk")
+    text_preview: str
 
 
 class ChatResponse(BaseModel):
-    """API response for chat/Q&A."""
     answer: str
     sources: list[SourceChunk]
     model_used: str
@@ -74,10 +66,60 @@ class ChatResponse(BaseModel):
     latency_ms: float
 
 
+# === Company Search / Ingest (Day 15) ===
+
+class CompanyInfo(BaseModel):
+    name: str
+    ticker: str
+    cik: str
+
+
+class SearchResponse(BaseModel):
+    results: list[CompanyInfo]
+    total: int
+
+
+class IngestResponse(BaseModel):
+    ticker: str
+    filing_id: str
+    chunk_count: int
+    already_existed: bool
+    company_name: str = ""
+    filed_date: str = ""
+
+
+# === Dashboard (Day 15) ===
+
+class DashboardResponse(BaseModel):
+    ticker: str
+    executive_summary: str | None = None
+    revenue_latest_year: str | None = None
+    revenue_yoy_change: str | None = None
+    net_income_latest_year: str | None = None
+    gross_margin_pct: str | None = None
+    top_3_risk_factors: list[str] = []
+    primary_revenue_segments: list[str] = []
+    management_outlook_summary: str | None = None
+
+
+# === Comparison (Day 15) ===
+
+class CompareRequest(BaseModel):
+    tickers: list[str] = Field(..., min_length=2, max_length=2)
+
+
+class CompareResponse(BaseModel):
+    ticker1: str
+    ticker2: str
+    metrics1: dict
+    metrics2: dict
+    analysis: dict
+
+
 # === Health ===
 
 class HealthResponse(BaseModel):
-    """Health check response."""
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     filings_loaded: int = 0
+    redis_ok: bool = False

@@ -35,7 +35,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     try {
       const { data } = await axios.post(`${API_URL}/api/chat`, {
         question: text,
-        filing_id: filingId,
+        ticker: ticker,
       })
       setHistory(h => [...h, {
         role: 'assistant',

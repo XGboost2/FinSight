@@ -33,6 +33,21 @@ def get_filing(filing_id: str) -> dict[str, Any] | None:
     return _store.get(filing_id)
 
 
+
+
+def get_filing_by_ticker(ticker: str) -> dict[str, Any] | None:
+    """Look up the most recently ingested filing for a ticker."""
+    ticker = ticker.upper()
+    matches = [
+        (fid, data) for fid, data in _store.items()
+        if data.get("ticker", "").upper() == ticker
+    ]
+    if not matches:
+        return None
+    # Return the most recently stored (last inserted wins)
+    fid, data = matches[-1]
+    return {"id": fid, **data}
+
 def list_filings() -> list[dict[str, Any]]:
     """List all ingested filings (without chunk text to keep it light)."""
     results = []
