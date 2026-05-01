@@ -1,0 +1,53 @@
+"""FinSight AI — Application configuration via Pydantic Settings.
+
+Loads from .env file automatically. Never commit real .env values.
+"""
+
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Central config — all env vars in one place."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    # --- App ---
+    APP_NAME: str = "FinSight AI"
+    ENVIRONMENT: str = "development"  # development | staging | production
+    LOG_LEVEL: str = "INFO"
+    DEBUG: bool = True
+
+    # --- LLM ---
+    ANTHROPIC_API_KEY: str = "[ENCRYPTION_KEY]"
+    OPENAI_API_KEY: str = "[ENCRYPTION_KEY]"
+
+    # --- SEC EDGAR ---
+    # Format: "AppName your@email.com" — required by SEC fair access policy
+    SEC_EDGAR_USER_AGENT: str = "FinSight kuralarasu.venkatesh@gmail.com"
+
+    # --- Vector DB (Day 14+) ---
+    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: str = ""
+
+    # --- Observability (Day 49+) ---
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
+    
+    # --- Cache (Day 49+) ---
+    REDIS_URL: str = "redis://localhost:6379"
+
+    # Alpha Vantage
+    ALPHA_VANTAGE_KEY: str = ""
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Cached singleton — call this everywhere instead of Settings()."""
+    return Settings()

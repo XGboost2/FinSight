@@ -1,0 +1,72 @@
+[
+  {
+    "id": "q01",
+    "ticker": "AAPL",
+    "question": "What are Apple's top three risk factors?",
+    "expected_topics": ["supply chain", "competition", "regulation"],
+    "notes": "Should cite specific risks, not generic ones"
+  },
+  {
+    "id": "q02",
+    "ticker": "AAPL",
+    "question": "What was Apple's total net revenue for the most recent fiscal year?",
+    "expected_topics": ["revenue", "fiscal year", "billion"],
+    "notes": "Must contain a specific dollar figure"
+  },
+  {
+    "id": "q03",
+    "ticker": "AAPL",
+    "question": "How does Apple describe its competitive position in the smartphone market?",
+    "expected_topics": ["competition", "iPhone", "market"],
+    "notes": "Should reference direct competitors or market dynamics"
+  },
+  {
+    "id": "q04",
+    "ticker": "MSFT",
+    "question": "What are Microsoft's primary sources of revenue?",
+    "expected_topics": ["cloud", "Azure", "Office", "LinkedIn"],
+    "notes": "Should break down by segment"
+  },
+  {
+    "id": "q05",
+    "ticker": "MSFT",
+    "question": "What risks does Microsoft identify related to AI and machine learning?",
+    "expected_topics": ["AI", "regulation", "ethics", "competition"],
+    "notes": "Day 14 baseline — AI risk language is evolving fast"
+  },
+  {
+    "id": "q06",
+    "ticker": "TSLA",
+    "question": "How does Tesla describe its manufacturing risks?",
+    "expected_topics": ["production", "Gigafactory", "supply chain", "recall"],
+    "notes": "Should mention specific facilities or processes"
+  },
+  {
+    "id": "q07",
+    "ticker": "TSLA",
+    "question": "What does Tesla say about its dependence on key personnel?",
+    "expected_topics": ["Elon Musk", "key person", "retention"],
+    "notes": "Classic risk factor — tests retrieval of specific named entities"
+  },
+  {
+    "id": "q08",
+    "ticker": "GOOGL",
+    "question": "What regulatory risks does Alphabet face?",
+    "expected_topics": ["antitrust", "GDPR", "EU", "advertising"],
+    "notes": "Should mention geographic regulatory differences"
+  },
+  {
+    "id": "q09",
+    "ticker": "GOOGL",
+    "question": "How does Alphabet describe its advertising revenue risks?",
+    "expected_topics": ["advertising", "revenue", "competition", "privacy"],
+    "notes": "Tests retrieval of financial risk language"
+  },
+  {
+    "id": "q10",
+    "ticker": "AMZN",
+    "question": "What does Amazon say about its labour and employment risks?",
+    "expected_topics": ["labour", "workforce", "unionisation", "wages"],
+    "notes": "Tests retrieval of HR/operational risk sections"
+  }
+]
