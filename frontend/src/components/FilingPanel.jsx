@@ -10,10 +10,22 @@ const SAMPLE_QUESTIONS = [
   'What does management say about future outlook?',
 ]
 
+const MODELS = [
+  { value: 'auto',               label: 'Auto',             group: 'DeepSeek' },
+  { value: 'deepseek-chat',      label: 'DS Chat',          group: 'DeepSeek' },
+  { value: 'deepseek-reasoner',  label: 'DS Reasoner',      group: 'DeepSeek' },
+  { value: 'claude-haiku-4-5',   label: 'Haiku',            group: 'Anthropic' },
+  { value: 'claude-sonnet-4-6',  label: 'Sonnet',           group: 'Anthropic' },
+  { value: 'claude-opus-4-7',    label: 'Opus',             group: 'Anthropic' },
+  { value: 'gpt-4o-mini',        label: 'GPT-4o Mini',      group: 'OpenAI' },
+  { value: 'gpt-4o',             label: 'GPT-4o',           group: 'OpenAI' },
+]
+
 export default function FilingPanel({ ticker, companyName, filingId, filing, fetchingFiling }) {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState([])
   const [chatLoading, setChatLoading] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('auto')
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -36,6 +48,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
       const { data } = await axios.post(`${API_URL}/api/chat`, {
         question: text,
         ticker: ticker,
+        model: selectedModel === 'auto' ? null : selectedModel,
       })
       setHistory(h => [...h, {
         role: 'assistant',
@@ -126,6 +139,20 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
                 </div>
               )}
               <div ref={bottomRef} />
+            </div>
+
+            <div className="model-selector">
+              {MODELS.map(m => (
+                <button
+                  key={m.value}
+                  type="button"
+                  className={`model-pill${selectedModel === m.value ? ' model-pill-active' : ''}`}
+                  onClick={() => setSelectedModel(m.value)}
+                  title={`${m.group}: ${m.label}`}
+                >
+                  {m.label}
+                </button>
+              ))}
             </div>
 
             <form onSubmit={handleSubmit} className="chat-form">

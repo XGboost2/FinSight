@@ -10,16 +10,51 @@ logger = logging.getLogger(__name__)
 
 DASHBOARD_PREFIX = "finsight:dashboard:"
 DASHBOARD_TTL = 60 * 60 * 24 * 7  # 7 days
-CHEAP_MODEL = "claude-haiku-4-5"
-
 _PRICING = {
+    "deepseek-chat": {"input": 0.07, "output": 0.28},
     "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
 }
 
 
 def _cost(model: str, tok_in: int, tok_out: int) -> float:
     p = _PRICING.get(model, {"input": 0.0, "output": 0.0})
     return round((tok_in * p["input"] + tok_out * p["output"]) / 1_000_000, 6)
+
+
+async def _call_json(prompt: str, settings) -> tuple[str, int, int, str]:
+    """Call whichever LLM is configured, return (raw_text, tok_in, tok_out, model_name)."""
+    if settings.DEEPSEEK_API_KEY:
+        from openai import AsyncOpenAI
+        model = "deepseek-chat"
+        client = AsyncOpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=model, max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, model
+
+    if settings.ANTHROPIC_API_KEY:
+        import anthropic
+        model = "claude-haiku-4-5"
+        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        resp = await client.messages.create(
+            model=model, max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens, model
+
+    if settings.OPENAI_API_KEY:
+        from openai import AsyncOpenAI
+        model = "gpt-4o-mini"
+        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        resp = await client.chat.completions.create(
+            model=model, max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, model
+
+    raise RuntimeError("No LLM API key configured")
 
 
 async def get_or_extract_dashboard(
@@ -111,14 +146,7 @@ Return only the JSON object. No markdown, no explanation."""
     llm_metrics: dict = {}
 
     try:
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        response = await client.messages.create(
-            model=CHEAP_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text.strip()
+        raw, tok_in, tok_out, model_used = await _call_json(prompt, settings)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -126,10 +154,8 @@ Return only the JSON object. No markdown, no explanation."""
         llm_metrics = json.loads(raw.strip())
         logger.info(
             "LLM narrative extraction: model=%s tok_in=%d tok_out=%d cost=$%.4f latency=%.0fms",
-            CHEAP_MODEL,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            _cost(CHEAP_MODEL, response.usage.input_tokens, response.usage.output_tokens),
+            model_used, tok_in, tok_out,
+            _cost(model_used, tok_in, tok_out),
             (time.perf_counter() - start) * 1000,
         )
     except Exception as e:

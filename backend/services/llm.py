@@ -13,11 +13,24 @@ logger = logging.getLogger(__name__)
 
 # Cost per 1M tokens (USD) — update as pricing changes
 _PRICING: dict[str, dict[str, float]] = {
-    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
-    "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gpt-4o": {"input": 2.50, "output": 10.00},
+    "deepseek-chat":     {"input": 0.07,  "output": 0.28},
+    "deepseek-reasoner": {"input": 0.55,  "output": 2.19},
+    "claude-haiku-4-5":  {"input": 0.80,  "output": 4.00},
+    "claude-sonnet-4-6": {"input": 3.00,  "output": 15.00},
+    "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
+    "gpt-4o-mini":       {"input": 0.15,  "output": 0.60},
+    "gpt-4o":            {"input": 2.50,  "output": 10.00},
 }
+
+
+def _provider(model: str) -> str:
+    if model.startswith("deepseek"):
+        return "deepseek"
+    if model.startswith("claude"):
+        return "anthropic"
+    if model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
+        return "openai"
+    return "deepseek"
 
 # System prompt for financial analysis
 SYSTEM_PROMPT = """You are FinSight AI, a financial analyst assistant.
@@ -35,6 +48,25 @@ def _calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     pricing = _PRICING.get(model, {"input": 0.0, "output": 0.0})
     cost = (tokens_in * pricing["input"] + tokens_out * pricing["output"]) / 1_000_000
     return round(cost, 6)
+
+
+CHEAP_MODEL = "deepseek-chat"
+POWER_MODEL = "deepseek-reasoner"
+
+# Signals that a question needs multi-step reasoning
+_POWER_KEYWORDS = {
+    "compare", "versus", "vs", "difference", "trend", "over the years",
+    "analyse", "analyze", "why", "explain", "impact", "risk assessment",
+    "summarise", "summarize", "outlook", "strategy", "forecast",
+}
+
+
+def _route_model(query: str) -> str:
+    """Use deepseek-reasoner for complex multi-step questions, deepseek-chat for simple lookups."""
+    q = query.lower()
+    if any(kw in q for kw in _POWER_KEYWORDS) or len(query) > 200:
+        return POWER_MODEL
+    return CHEAP_MODEL
 
 
 async def ask_llm(
@@ -61,14 +93,26 @@ async def ask_llm(
 
 Question: {query}"""
 
-    # Try Anthropic Claude first
-    if settings.ANTHROPIC_API_KEY:
-        result = await _call_anthropic(user_message, model or "claude-3-5-haiku-20241022", settings)
-    elif settings.OPENAI_API_KEY:
-        result = await _call_openai(user_message, model or "gpt-4o-mini", settings)
+    routed_model = model or _route_model(query)
+    provider = _provider(routed_model)
+    logger.info("Model router: query_len=%d → %s (%s)", len(query), routed_model, provider)
+
+    if provider == "deepseek" and settings.DEEPSEEK_API_KEY:
+        result = await _call_deepseek(user_message, routed_model, settings)
+    elif provider == "anthropic" and settings.ANTHROPIC_API_KEY:
+        result = await _call_anthropic(user_message, routed_model, settings)
+    elif provider == "openai" and settings.OPENAI_API_KEY:
+        result = await _call_openai(user_message, routed_model, settings)
     else:
-        # Mock response for development without API keys
-        result = _mock_response(query)
+        logger.warning("No API key for provider=%s model=%s — falling back", provider, routed_model)
+        if settings.DEEPSEEK_API_KEY:
+            result = await _call_deepseek(user_message, CHEAP_MODEL, settings)
+        elif settings.ANTHROPIC_API_KEY:
+            result = await _call_anthropic(user_message, "claude-haiku-4-5", settings)
+        elif settings.OPENAI_API_KEY:
+            result = await _call_openai(user_message, "gpt-4o-mini", settings)
+        else:
+            result = _mock_response(query)
 
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     result["latency_ms"] = elapsed_ms
@@ -107,6 +151,41 @@ async def _call_anthropic(
 
     return {
         "answer": response.content[0].text,
+        "model_used": model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": _calc_cost(model, tokens_in, tokens_out),
+    }
+
+
+async def _call_deepseek(
+    user_message: str,
+    model: str,
+    settings: Any,
+) -> dict[str, Any]:
+    """Call DeepSeek API (OpenAI-compatible, ~10x cheaper than Claude Haiku)."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.DEEPSEEK_BASE_URL,
+    )
+
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=1024,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+    )
+
+    usage = response.usage
+    tokens_in = usage.prompt_tokens if usage else 0
+    tokens_out = usage.completion_tokens if usage else 0
+
+    return {
+        "answer": response.choices[0].message.content or "",
         "model_used": model,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,

@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # --- LLM ---
-    ANTHROPIC_API_KEY: str = "[ENCRYPTION_KEY]"
-    OPENAI_API_KEY: str = "[ENCRYPTION_KEY]"
+    ANTHROPIC_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
     # --- SEC EDGAR ---
     # Format: "AppName your@email.com" — required by SEC fair access policy
@@ -42,9 +44,6 @@ class Settings(BaseSettings):
     
     # --- Cache (Day 49+) ---
     REDIS_URL: str = "redis://localhost:6379"
-
-    # Alpha Vantage
-    ALPHA_VANTAGE_KEY: str = ""
 
 
 @lru_cache

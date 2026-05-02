@@ -49,6 +49,7 @@ class FilingListResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     ticker: str = Field(..., min_length=1, max_length=10)
+    model: str | None = None  # None = auto-route
 
 
 class SourceChunk(BaseModel):
