@@ -4,7 +4,7 @@ All structured data flows through these models. Never use raw dicts.
 """
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # === Filing Models (legacy — keep for /api/filings/* endpoints) ===
@@ -100,6 +100,11 @@ class DashboardResponse(BaseModel):
     top_3_risk_factors: list[str] = []
     primary_revenue_segments: list[str] = []
     management_outlook_summary: str | None = None
+
+    @field_validator("top_3_risk_factors", "primary_revenue_segments", mode="before")
+    @classmethod
+    def none_to_empty_list(cls, v):
+        return v if v is not None else []
 
 
 # === Comparison (Day 15) ===

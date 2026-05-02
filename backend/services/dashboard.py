@@ -3,15 +3,17 @@ import logging
 import time
 
 from config import get_settings
+from cache.ticker_cache import get_ticker_info
+from ingestion.xbrl import get_xbrl_metrics
 
 logger = logging.getLogger(__name__)
 
 DASHBOARD_PREFIX = "finsight:dashboard:"
 DASHBOARD_TTL = 60 * 60 * 24 * 7  # 7 days
-CHEAP_MODEL = "claude-3-5-haiku-20241022"
+CHEAP_MODEL = "claude-haiku-4-5"
 
 _PRICING = {
-    "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00},
+    "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
 }
 
 
@@ -26,46 +28,75 @@ async def get_or_extract_dashboard(
     filing_id: str,
     fallback_chunks: list[dict] | None = None,
 ) -> dict:
-    """Return dashboard metrics. Redis cache first; Haiku extraction on miss."""
+    """Return dashboard metrics. Redis cache first; XBRL + Haiku extraction on miss."""
     key = DASHBOARD_PREFIX + ticker.upper()
     cached = redis_client.get(key)
     if cached:
         logger.info("Dashboard cache hit: %s", ticker)
         return json.loads(cached)
 
-    metrics = await _extract_metrics(ticker, filing_id, fallback_chunks or [])
-    redis_client.setex(key, DASHBOARD_TTL, json.dumps(metrics))
-    logger.info("Dashboard metrics cached for %s (TTL 7d)", ticker)
+    metrics = await _extract_metrics(redis_client, ticker, filing_id, fallback_chunks or [])
+
+    # Cache only if we got at least some data
+    has_data = any(
+        metrics.get(f) for f in ("revenue_latest_year", "executive_summary", "top_3_risk_factors")
+    )
+    if has_data:
+        redis_client.setex(key, DASHBOARD_TTL, json.dumps(metrics))
+        logger.info("Dashboard metrics cached for %s (TTL 7d)", ticker)
+    else:
+        logger.warning("Dashboard extraction returned no data for %s — not caching", ticker)
     return metrics
 
 
-async def _extract_metrics(ticker: str, filing_id: str, fallback_chunks: list[dict]) -> dict:
+async def _extract_metrics(
+    redis_client,
+    ticker: str,
+    filing_id: str,
+    fallback_chunks: list[dict],
+) -> dict:
+    # ── 1. XBRL: deterministic quantitative metrics ───────────────────
+    xbrl_metrics = {}
+    company_info = get_ticker_info(redis_client, ticker)
+    if company_info and company_info.get("cik"):
+        xbrl_metrics = await get_xbrl_metrics(company_info["cik"])
+        if xbrl_metrics:
+            logger.info("XBRL metrics fetched for %s", ticker)
+        else:
+            logger.warning("XBRL returned no data for %s (CIK %s)", ticker, company_info["cik"])
+
+    # ── 2. LLM: narrative-only fields ────────────────────────────────
     from rag.pipeline import retrieve
 
-    context_chunks = retrieve(
-        "revenue net income gross margin risk factors management outlook revenue segments",
-        filing_id,
-        top_k=8,
-    )
+    queries = [
+        "risk factors material risks business challenges regulatory",
+        "management discussion analysis outlook future guidance strategy",
+        "business segments revenue breakdown product line geography",
+        "executive summary company overview annual performance",
+    ]
+    seen_indices: set = set()
+    context_chunks = []
+    for query in queries:
+        for c in retrieve(query, filing_id, top_k=5):
+            if c.get("chunk_index") not in seen_indices:
+                seen_indices.add(c.get("chunk_index"))
+                context_chunks.append(c)
+
     if not context_chunks:
-        context_chunks = fallback_chunks[:8]
+        context_chunks = fallback_chunks[:15]
 
     context = "\n\n---\n\n".join(
         f"[Chunk {c.get('chunk_index', i)}]\n{c['text']}"
         for i, c in enumerate(context_chunks)
-    )[:12000]
+    )[:14000]
 
-    prompt = f"""Extract structured financial metrics from this SEC 10-K filing for {ticker}.
-Return ONLY valid JSON with exactly these keys. Use null for any metric not found in the text.
+    prompt = f"""Extract narrative insights from this SEC 10-K filing for {ticker}.
+Return ONLY valid JSON with exactly these keys. Use null if not found.
 
 {{
-  "executive_summary": "2-3 paragraph holistic overview of company FY performance and key themes",
-  "revenue_latest_year": "formatted value e.g. $383B",
-  "revenue_yoy_change": "formatted percentage e.g. +2.9%",
-  "net_income_latest_year": "formatted value e.g. $96.9B",
-  "gross_margin_pct": "formatted percentage e.g. 45.2%",
+  "executive_summary": "2-3 sentence overview of FY performance and key themes",
   "top_3_risk_factors": ["concise risk 1", "concise risk 2", "concise risk 3"],
-  "primary_revenue_segments": ["Segment A 52%", "Segment B 22%", "Segment C 8%"],
+  "primary_revenue_segments": ["Segment A", "Segment B", "Segment C"],
   "management_outlook_summary": "1-2 sentences on forward guidance from management"
 }}
 
@@ -77,43 +108,42 @@ Return only the JSON object. No markdown, no explanation."""
 
     settings = get_settings()
     start = time.perf_counter()
+    llm_metrics: dict = {}
 
     try:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
         response = await client.messages.create(
             model=CHEAP_MODEL,
-            max_tokens=1024,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        tok_in = response.usage.input_tokens
-        tok_out = response.usage.output_tokens
-
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        metrics = json.loads(raw.strip())
-
+        llm_metrics = json.loads(raw.strip())
         logger.info(
-            "Dashboard extraction: model=%s tok_in=%d tok_out=%d cost=$%.4f latency=%.0fms",
-            CHEAP_MODEL, tok_in, tok_out,
-            _cost(CHEAP_MODEL, tok_in, tok_out),
+            "LLM narrative extraction: model=%s tok_in=%d tok_out=%d cost=$%.4f latency=%.0fms",
+            CHEAP_MODEL,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            _cost(CHEAP_MODEL, response.usage.input_tokens, response.usage.output_tokens),
             (time.perf_counter() - start) * 1000,
         )
     except Exception as e:
-        logger.error("Dashboard extraction failed for %s: %s", ticker, e)
-        metrics = {
-            "executive_summary": None,
-            "revenue_latest_year": None,
-            "revenue_yoy_change": None,
-            "net_income_latest_year": None,
-            "gross_margin_pct": None,
-            "top_3_risk_factors": [],
-            "primary_revenue_segments": [],
-            "management_outlook_summary": None,
-        }
+        logger.error("LLM narrative extraction failed for %s: %s", ticker, e)
 
-    metrics["ticker"] = ticker.upper()
-    return metrics
+    # ── 3. Merge: XBRL wins for numbers, LLM wins for narrative ──────
+    return {
+        "ticker": ticker.upper(),
+        "executive_summary": llm_metrics.get("executive_summary"),
+        "revenue_latest_year": xbrl_metrics.get("revenue_latest_year"),
+        "revenue_yoy_change": xbrl_metrics.get("revenue_yoy_change"),
+        "net_income_latest_year": xbrl_metrics.get("net_income_latest_year"),
+        "gross_margin_pct": xbrl_metrics.get("gross_margin_pct"),
+        "top_3_risk_factors": llm_metrics.get("top_3_risk_factors") or [],
+        "primary_revenue_segments": llm_metrics.get("primary_revenue_segments") or [],
+        "management_outlook_summary": llm_metrics.get("management_outlook_summary"),
+    }

@@ -342,6 +342,11 @@ body {
   overflow: hidden;
 }
 
+.tv-chart-container {
+  width: 100%;
+  height: 100%;
+}
+
 
 .dashboard-summary {
   padding: 1rem 1.1rem;
@@ -515,6 +520,32 @@ body {
 }
 .compare-title strong { color: var(--accent); }
 
+
+.compare-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  height: 300px;
+}
+
+.compare-chart-card {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.compare-chart-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0.5rem 0.75rem 0;
+  letter-spacing: 0.04em;
+}
+
+.compare-chart-card .tv-chart-container {
+  flex: 1;
+  min-height: 0;
+}
 
 .compare-body {
   display: grid;

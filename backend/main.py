@@ -13,6 +13,7 @@ from cache.redis_client import get_redis
 from cache.ticker_cache import load_tickers_into_redis, TICKERS_KEY
 from config import get_settings
 from jobs.refresh_tickers import refresh_ticker_index
+from rag.retriever import ensure_collection
 from api.routes import router as api_router
 from logging_config import setup_logging
 
@@ -29,6 +30,12 @@ async def lifespan(app: FastAPI):
                 "ok" if settings.OPENAI_API_KEY else "missing")
 
     scheduler = AsyncIOScheduler()
+
+    try:
+        ensure_collection()
+        logger.info("Qdrant collection ready")
+    except Exception as e:
+        logger.error("Qdrant startup failed: %s", e)
 
     try:
         redis = get_redis()

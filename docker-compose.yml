@@ -10,6 +10,7 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./backend:/app
+      - fastembed_cache:/root/.cache/fastembed
     environment:
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=http://qdrant:6333
@@ -19,6 +20,9 @@ services:
     depends_on:
       - qdrant
       - redis
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
   frontend:
@@ -57,3 +61,4 @@ services:
 volumes:
   qdrant_data:
   redis_data:
+  fastembed_cache:

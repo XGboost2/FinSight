@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
+from config import get_settings
 from cache.filing_registry import (
     get_filing_record,
     is_ingested,
@@ -82,12 +83,12 @@ async def get_company_info(ticker: str) -> CompanyInfo:
 # ── Ingest Pipeline ──────────────────────────────────────────────────
 
 
-async def _run_ingest(ticker: str) -> dict:
+async def _run_ingest(ticker: str, force: bool = False) -> dict:
     """Shared ingest logic: registry gate → EDGAR → chunk → Qdrant → dashboard."""
     ticker = ticker.upper()
     redis = get_redis()
 
-    if is_ingested(redis, ticker):
+    if is_ingested(redis, ticker) and not force:
         record = get_filing_record(redis, ticker)
         filing = get_filing_by_ticker(ticker)
         logger.info("Ingest skipped (already exists): %s chunks=%d", ticker, record["chunk_count"])
@@ -141,10 +142,10 @@ async def _run_ingest(ticker: str) -> dict:
 
 
 @router.post("/companies/{ticker}/ingest", response_model=IngestResponse)
-async def ingest_company(ticker: str) -> IngestResponse:
-    """Fetch, chunk, embed and cache a company's 10-K. Idempotent."""
+async def ingest_company(ticker: str, force: bool = False) -> IngestResponse:
+    """Fetch, chunk, embed and cache a company's 10-K. Idempotent. Use ?force=true to re-ingest."""
     try:
-        data = await _run_ingest(ticker)
+        data = await _run_ingest(ticker, force=force)
     except HTTPException:
         raise
     except Exception as e:
@@ -309,15 +310,15 @@ async def get_filing_detail(filing_id: str) -> FilingResponse:
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     logger.info("Chat request: ticker=%s question=%r", request.ticker, request.question[:80])
-    filing = get_filing_by_ticker(request.ticker)
-    if not filing:
+    redis = get_redis()
+    if not is_ingested(redis, request.ticker):
         logger.warning("Chat: no filing for %s", request.ticker)
         raise HTTPException(404, f"No filing for '{request.ticker}'. Ingest first.")
-    filing_id = filing["id"]
+
+    record = get_filing_record(redis, request.ticker)
+    filing_id = record["filing_id"]
 
     relevant_chunks = rag_retrieve(request.question, filing_id, top_k=5)
-    if not relevant_chunks:
-        relevant_chunks = filing.get("chunks", [])[:5]
 
     context = "\n\n---\n\n".join(
         f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks
