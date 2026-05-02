@@ -566,6 +566,17 @@ body {
   gap: 0.35rem;
 }
 
+.bar-trend-divider {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+}
+
 .bar-metric-label {
   font-size: 0.68rem;
   font-weight: 600;

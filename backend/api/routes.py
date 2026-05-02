@@ -38,6 +38,7 @@ from models.schemas import (
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
+from ingestion.xbrl import get_revenue_trend
 from services.llm import ask_llm
 from services.store import (
     get_filing,
@@ -205,8 +206,14 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
     result = await get_or_generate_comparison(
         redis, t1, t2, data1["filing_id"], data2["filing_id"], metrics1, metrics2
     )
+
+    info1 = get_ticker_info(redis, t1)
+    info2 = get_ticker_info(redis, t2)
+    trends1 = await get_revenue_trend(info1["cik"]) if info1 and info1.get("cik") else []
+    trends2 = await get_revenue_trend(info2["cik"]) if info2 and info2.get("cik") else []
+
     logger.info("Comparison complete: %s vs %s", t1, t2)
-    return CompareResponse(**result)
+    return CompareResponse(**result, trends1=trends1, trends2=trends2)
 
 
 # ── Admin ────────────────────────────────────────────────────────────

@@ -100,7 +100,7 @@ export default function CompareView({ comparison, loading, error, onBack }) {
 
   if (!comparison) return null
 
-  const { ticker1, ticker2, metrics1, metrics2, analysis } = comparison
+  const { ticker1, ticker2, metrics1, metrics2, analysis, trends1 = [], trends2 = [] } = comparison
   const pros1 = analysis.pros_cons?.[ticker1]?.pros ?? []
   const cons1 = analysis.pros_cons?.[ticker1]?.cons ?? []
   const pros2 = analysis.pros_cons?.[ticker2]?.pros ?? []
@@ -149,6 +149,25 @@ export default function CompareView({ comparison, loading, error, onBack }) {
             val2={metrics2.gross_margin_pct}
             t1={ticker1} t2={ticker2}
           />
+
+          {trends1.length > 0 && (
+            <>
+              <div className="bar-trend-divider">Revenue by Year</div>
+              {trends1.map(d1 => {
+                const d2 = trends2.find(d => d.year === d1.year)
+                return (
+                  <BarRow
+                    key={d1.year}
+                    label={d1.year}
+                    val1={d1.value}
+                    val2={d2?.value ?? null}
+                    t1={ticker1}
+                    t2={ticker2}
+                  />
+                )
+              })}
+            </>
+          )}
         </div>
 
         <div className="compare-analysis glass-card">

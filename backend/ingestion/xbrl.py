@@ -78,6 +78,22 @@ def _yoy(current: float, prior: float) -> str | None:
     return f"+{pct:.1f}%" if pct >= 0 else f"{pct:.1f}%"
 
 
+async def get_revenue_trend(cik: str, years: int = 4) -> list[dict]:
+    """Return last N years of annual revenue for YoY trend rows."""
+    facts = await fetch_company_facts(cik)
+    if not facts:
+        return []
+    us_gaap = facts.get("facts", {}).get("us-gaap", {})
+    for concept in REVENUE_CONCEPTS:
+        values = _annual_values(us_gaap, concept)
+        if values:
+            return [
+                {"year": e["end"][:4], "value": _fmt_usd(e["val"]), "raw": e["val"]}
+                for e in values[:years]
+            ]
+    return []
+
+
 async def get_xbrl_metrics(cik: str) -> dict:
     """
     Return the 4 quantitative dashboard metrics from XBRL.

@@ -113,12 +113,20 @@ class CompareRequest(BaseModel):
     tickers: list[str] = Field(..., min_length=2, max_length=2)
 
 
+class RevenueYear(BaseModel):
+    year: str
+    value: str
+    raw: float
+
+
 class CompareResponse(BaseModel):
     ticker1: str
     ticker2: str
     metrics1: dict
     metrics2: dict
     analysis: dict
+    trends1: list[RevenueYear] = []
+    trends2: list[RevenueYear] = []
 
 
 # === Health ===
