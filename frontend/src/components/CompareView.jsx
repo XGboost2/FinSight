@@ -1,47 +1,4 @@
-import { useEffect, useRef } from 'react'
 import { Loader, ArrowLeft } from 'lucide-react'
-
-function TradingViewCompareChart({ ticker1, ticker2 }) {
-  const containerRef = useRef(null)
-
-  useEffect(() => {
-    if (!ticker1 || !ticker2 || !containerRef.current) return
-    const container = containerRef.current
-    container.innerHTML = ''
-
-    const widgetDiv = document.createElement('div')
-    widgetDiv.id = `tv_cmp_${Date.now()}`
-    widgetDiv.style.height = '100%'
-    container.appendChild(widgetDiv)
-
-    const script = document.createElement('script')
-    script.src = 'https://s3.tradingview.com/tv.js'
-    script.async = true
-    script.onload = () => {
-      if (!window.TradingView) return
-      new window.TradingView.widget({
-        autosize: true,
-        symbol: ticker1,
-        interval: 'D',
-        timezone: 'Etc/UTC',
-        theme: 'dark',
-        style: '1',
-        locale: 'en',
-        toolbar_bg: '#0d111c',
-        enable_publishing: false,
-        hide_side_toolbar: true,
-        container_id: widgetDiv.id,
-        backgroundColor: 'rgba(8, 13, 26, 1)',
-        compare_symbols: [{ symbol: ticker2, position: 'SameScale' }],
-      })
-    }
-    container.appendChild(script)
-
-    return () => { container.innerHTML = '' }
-  }, [ticker1, ticker2])
-
-  return <div ref={containerRef} className="tv-chart-container" />
-}
 
 function parseNumber(val) {
   if (!val) return 0
@@ -114,10 +71,6 @@ export default function CompareView({ comparison, loading, error, onBack }) {
         <span className="compare-title">
           <strong>{ticker1}</strong> vs <strong>{ticker2}</strong>
         </span>
-      </div>
-
-      <div className="compare-chart glass-card">
-        <TradingViewCompareChart ticker1={ticker1} ticker2={ticker2} />
       </div>
 
       <div className="compare-body">

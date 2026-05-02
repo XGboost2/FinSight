@@ -57,6 +57,7 @@ Icon
 
 # Logs
 logs/
+backend/logs/
 *.log
 
 # IDE

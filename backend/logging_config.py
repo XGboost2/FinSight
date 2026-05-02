@@ -4,7 +4,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_FILE = LOG_DIR / "finsight.log"
 FMT = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
 DATEFMT = "%Y-%m-%d %H:%M:%S"
