@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard'
 import CompareView from './components/CompareView'
 import FilingPanel from './components/FilingPanel'
 import StatusDots from './components/StatusDots'
+import ReportView from './components/ReportView'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -140,6 +141,7 @@ export default function App() {
                 loading={primaryLoading}
                 error={primaryError}
               />
+              <ReportView ticker={primary?.ticker ?? null} />
             </section>
             <aside className="filing-col">
               <FilingPanel

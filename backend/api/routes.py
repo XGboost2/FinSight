@@ -20,6 +20,7 @@ from cache.ticker_cache import get_ticker_info, load_tickers_into_redis, search_
 from ingestion.chunker import chunk_text
 from ingestion.edgar import fetch_and_extract
 from models.schemas import (
+    AnalysisReport,
     ChatRequest,
     ChatResponse,
     CompanyInfo,
@@ -38,6 +39,7 @@ from models.schemas import (
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
+from services.report import get_or_generate_report
 from ingestion.xbrl import get_revenue_trend
 from services.llm import ask_llm
 from services.store import (
@@ -176,6 +178,34 @@ async def get_dashboard(ticker: str) -> DashboardResponse:
     metrics = await get_or_extract_dashboard(redis, ticker, record["filing_id"], fallback)
     logger.info("Dashboard served: %s", ticker)
     return DashboardResponse(**{k: v for k, v in metrics.items() if k != "ticker"}, ticker=ticker)
+
+
+# ── Analysis Report ──────────────────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/report", response_model=AnalysisReport)
+async def get_report(ticker: str, refresh: bool = False) -> AnalysisReport:
+    """Generate comprehensive 10-K analysis report: findings table, bull/bear cases, verdict."""
+    ticker = ticker.upper()
+    logger.info("Report request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+
+    if not is_ingested(redis, ticker):
+        logger.warning("Report: %s not ingested", ticker)
+        raise HTTPException(404, f"No filing for '{ticker}'. Call /ingest first.")
+
+    record = get_filing_record(redis, ticker)
+    filing = get_filing_by_ticker(ticker)
+    fallback = filing.get("chunks", []) if filing else []
+
+    try:
+        report = await get_or_generate_report(redis, ticker, record["filing_id"], fallback, refresh=refresh)
+    except Exception as e:
+        logger.error("Report failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"Report generation failed: {e}")
+
+    logger.info("Report served: %s", ticker)
+    return AnalysisReport(**report)
 
 
 # ── Comparison Engine ────────────────────────────────────────────────

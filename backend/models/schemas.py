@@ -130,6 +130,41 @@ class CompareResponse(BaseModel):
     trends2: list[RevenueYear] = []
 
 
+# === Analysis Report ===
+
+class FindingRow(BaseModel):
+    category: str
+    metric: str
+    value: str
+    yoy: str | None = None
+    signal: str = "neutral"   # positive | caution | negative | neutral
+    interpretation: str = ""
+
+
+class AnalysisReport(BaseModel):
+    ticker: str
+    company_name: str = ""
+    generated_at: str = ""
+    company_overview: str = ""
+    trend_narrative: str = ""
+    findings_table: list[FindingRow] = []
+    risk_score: float = 0.0
+    risk_factors: list[str] = []
+    sentiment_score: float = 0.5
+    sentiment_label: str = "Neutral"
+    management_themes: str = ""
+    bull_case: list[str] = []
+    bear_case: list[str] = []
+    verdict: str = ""
+    financial_data: dict = {}
+    error: str | None = None
+
+    @field_validator("risk_factors", "bull_case", "bear_case", "findings_table", mode="before")
+    @classmethod
+    def none_to_empty(cls, v):
+        return v if v is not None else []
+
+
 # === Health ===
 
 class HealthResponse(BaseModel):

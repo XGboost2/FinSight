@@ -129,6 +129,52 @@ Question: {query}"""
     return result
 
 
+async def call_llm_raw(
+    prompt: str,
+    max_tokens: int = 2500,
+    model: str | None = None,
+) -> tuple[str, int, int, str]:
+    """
+    Raw LLM call — no system prompt, no context injection.
+    Use for structured JSON extraction (report, dashboard, sentiment).
+    Returns: (text, tokens_in, tokens_out, model_name)
+    """
+    settings = get_settings()
+    provider = _provider(model) if model else None
+
+    if (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
+        from openai import AsyncOpenAI
+        m = model or CHEAP_MODEL
+        client = AsyncOpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=m, max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, m
+
+    if (not model or provider == "anthropic") and settings.ANTHROPIC_API_KEY:
+        import anthropic
+        m = model or "claude-haiku-4-5"
+        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        resp = await client.messages.create(
+            model=m, max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens, m
+
+    if (not model or provider == "openai") and settings.OPENAI_API_KEY:
+        from openai import AsyncOpenAI
+        m = model or "gpt-4o-mini"
+        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        resp = await client.chat.completions.create(
+            model=m, max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, m
+
+    raise RuntimeError("No LLM API key configured")
+
+
 async def _call_anthropic(
     user_message: str,
     model: str,

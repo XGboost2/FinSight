@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Loader, ArrowLeft } from 'lucide-react'
+import ReportView from './ReportView'
 
 function TradingViewChart({ ticker }) {
   const containerRef = useRef(null)
@@ -216,6 +217,21 @@ export default function CompareView({ comparison, loading, error, onBack }) {
               <p className="verdict-text">{analysis.verdict}</p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Detailed reports side by side */}
+      <div className="compare-reports-header">
+        <div className="section-label">Detailed Analysis</div>
+      </div>
+      <div className="compare-reports-grid">
+        <div className="compare-report-col">
+          <div className="compare-report-ticker">{ticker1}</div>
+          <ReportView ticker={ticker1} compact />
+        </div>
+        <div className="compare-report-col">
+          <div className="compare-report-ticker">{ticker2}</div>
+          <ReportView ticker={ticker2} compact />
         </div>
       </div>
     </div>
