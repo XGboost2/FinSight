@@ -14,7 +14,9 @@ Built as a portfolio project demonstrating production-grade AI engineering: RAG 
 | **RAG Q&A** | Semantic search over filing chunks → grounded LLM answer with source citations and cost metadata |
 | **XBRL Financials** | Revenue, net income, gross margin, YoY growth pulled directly from SEC EDGAR XBRL API — deterministic, no LLM guessing |
 | **Dashboard** | Per-company metrics card + executive summary, risk factors, revenue segments, management outlook |
-| **Side-by-side Compare** | Two-ticker head-to-head: financial bar charts, YoY revenue trend, pros/cons, strategic verdict |
+| **10-K Analysis Report** | Full fundamental analysis: company overview, findings table (revenue/profitability/risk/sentiment), risk gauge (0–100), management sentiment score, bull/bear cases, verdict. XBRL + multi-query RAG + LLM synthesis. Cached 24h, `?refresh=true` to regenerate |
+| **Side-by-side Compare** | Two-ticker head-to-head: financial bar charts, YoY revenue trend, compact analysis reports for both companies, pros/cons, strategic verdict |
+| **LLM Cost Tracker** | Every API call atomically records cost (USD), token counts, and model name to Redis. Aggregates across day/week/month with per-model breakdown. Viewable via `$` button in topbar |
 | **Model Selector** | Choose DeepSeek Chat/Reasoner, Claude Haiku/Sonnet/Opus, or GPT-4o from the chat panel |
 | **Smart Model Router** | Auto-routes simple queries to cheap model, complex reasoning queries to power model |
 | **Company Search** | Autocomplete across ~13k SEC-registered companies via Redis — zero API calls at query time |
@@ -44,11 +46,13 @@ FastAPI :8000  ──  APScheduler (daily 02:00 UTC ticker refresh)
       ├── services/
       │     llm.py         ← DeepSeek (primary) → Anthropic → OpenAI → mock
       │     dashboard.py   ← XBRL metrics + LLM narrative extraction, Redis cache
+      │     report.py      ← 10-K fundamental analysis: findings table, bull/bear, verdict
       │     comparison.py  ← two-ticker LLM analysis, Redis cache
       │
       ├── cache/
       │     ticker_cache.py    ← SEC ticker → CIK, Redis hash
-      │     filing_registry.py ← ingested ticker registry, Redis hash
+      │     filing_registry.py ← ingested ticker registry, filing-type aware keys
+      │     cost_tracker.py    ← LLM call cost recording, day/week/month aggregation
       │     redis_client.py    ← Redis singleton
       │
       ├── api/routes.py    ← all REST endpoints, Pydantic I/O, per-request logging
@@ -95,7 +99,9 @@ FastAPI :8000  ──  APScheduler (daily 02:00 UTC ticker refresh)
 | `POST` | `/api/chat` | RAG Q&A with optional `model` override |
 | `GET` | `/api/companies/search?q=apple` | Company autocomplete from Redis |
 | `GET` | `/api/companies/{ticker}/dashboard` | XBRL metrics + LLM narrative |
+| `GET` | `/api/companies/{ticker}/report` | Full 10-K analysis report. Add `?refresh=true` to regenerate |
 | `POST` | `/api/companies/compare` | Head-to-head comparison with YoY trends |
+| `GET` | `/api/admin/costs` | LLM cost breakdown by day/week/month, per model |
 | `POST` | `/api/admin/refresh-tickers` | Manually refresh ticker cache |
 | `GET` | `/api/health` | Redis + Qdrant status + filing count |
 | `GET` | `/docs` | Swagger UI |
@@ -213,13 +219,15 @@ finsight-ai/
 │   │   ├── retriever.py     ← Qdrant client
 │   │   └── pipeline.py      ← ingest + retrieve
 │   ├── services/
-│   │   ├── llm.py           ← multi-provider router + model selector
+│   │   ├── llm.py           ← multi-provider router + model selector + cost recording
 │   │   ├── dashboard.py     ← XBRL + LLM extraction, Redis cache
+│   │   ├── report.py        ← 10-K fundamental analysis report, 24h cache
 │   │   └── comparison.py    ← two-ticker analysis
 │   ├── cache/
 │   │   ├── redis_client.py
 │   │   ├── ticker_cache.py
-│   │   └── filing_registry.py
+│   │   ├── filing_registry.py  ← filing-type aware keys (10-K, 10-Q, 8-K ready)
+│   │   └── cost_tracker.py     ← LLM cost recording + day/week/month aggregation
 │   └── jobs/refresh_tickers.py
 ├── frontend/
 │   └── src/
@@ -228,7 +236,9 @@ finsight-ai/
 │           ├── CompanySearch.jsx   ← debounced autocomplete
 │           ├── FilingPanel.jsx     ← chat panel + 8-model selector
 │           ├── Dashboard.jsx       ← metrics + TradingView chart
-│           ├── CompareView.jsx     ← comparison + YoY revenue trend
+│           ├── ReportView.jsx      ← 10-K analysis report (findings, risk gauge, bull/bear)
+│           ├── CompareView.jsx     ← comparison + YoY revenue trend + compact reports
+│           ├── CostPanel.jsx       ← LLM cost modal (day/week/month, per-model table)
 │           └── StatusDots.jsx      ← Redis/Qdrant health indicators
 └── tests/
     ├── conftest.py
@@ -247,6 +257,9 @@ finsight-ai/
 - [x] Redis + Qdrant health monitoring
 - [x] Rotating file logger + per-endpoint structured logging
 - [x] Unit tests — backend (pytest) + frontend (vitest)
+- [x] 10-K fundamental analysis report (findings table, risk gauge, bull/bear, verdict)
+- [x] Filing-type aware Redis key schema (ready for 10-Q / 8-K)
+- [x] LLM cost tracker — per-call recording, day/week/month aggregation, UI panel
 - [ ] Hybrid BM25 + dense vector search
 - [ ] YoY risk factor diff (highlight what changed year-over-year)
 - [ ] FinBERT sentiment analysis per MD&A section
