@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import axios from 'axios'
-import { TrendingUp, GitCompare, X } from 'lucide-react'
+import { TrendingUp, GitCompare, X, DollarSign } from 'lucide-react'
 import CompanySearch from './components/CompanySearch'
 import Dashboard from './components/Dashboard'
 import CompareView from './components/CompareView'
 import FilingPanel from './components/FilingPanel'
 import StatusDots from './components/StatusDots'
 import ReportView from './components/ReportView'
+import CostPanel from './components/CostPanel'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -28,6 +29,8 @@ export default function App() {
   const [comparison, setComparison] = useState(null)
   const [compareLoading, setCompareLoading] = useState(false)
   const [compareError, setCompareError] = useState(null)
+
+  const [showCosts, setShowCosts] = useState(false)
 
   const handleSelectPrimary = async (company) => {
     setPrimary(company)
@@ -122,7 +125,12 @@ export default function App() {
         )}
 
         <StatusDots />
+        <button className="btn-icon cost-btn" onClick={() => setShowCosts(true)} title="LLM Cost Tracker">
+          <DollarSign size={15} />
+        </button>
       </header>
+
+      {showCosts && <CostPanel onClose={() => setShowCosts(false)} />}
 
       <main className={`layout ${showCompare ? 'layout-full' : ''}`}>
         {showCompare ? (
@@ -141,7 +149,10 @@ export default function App() {
                 loading={primaryLoading}
                 error={primaryError}
               />
-              <ReportView ticker={primary?.ticker ?? null} />
+              <ReportView
+                ticker={primary?.ticker ?? null}
+                ingesting={primaryLoading}
+              />
             </section>
             <aside className="filing-col">
               <FilingPanel

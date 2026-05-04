@@ -35,13 +35,13 @@ function SentimentBadge({ score, label }) {
   return <span className={`sentiment-badge ${cls}`}>{label}</span>
 }
 
-export default function ReportView({ ticker, compact = false }) {
+export default function ReportView({ ticker, compact = false, ingesting = false }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
   const fetchReport = async (refresh = false) => {
-    if (!ticker) return
+    if (!ticker || ingesting) return
     setLoading(true)
     setError(null)
     try {
@@ -56,21 +56,21 @@ export default function ReportView({ ticker, compact = false }) {
     }
   }
 
-  useEffect(() => { fetchReport() }, [ticker])
+  useEffect(() => { fetchReport() }, [ticker, ingesting])
 
   if (!ticker) return null
 
-  if (loading) return (
+  if (ingesting || loading) return (
     <div className="report-loading glass-card">
       <Loader size={16} className="spin" />
-      <span>Generating analysis report — this takes 10-15s on first load…</span>
+      <span>{ingesting ? 'Fetching 10-K filing…' : 'Generating analysis report — first load takes 10-15s…'}</span>
     </div>
   )
 
   if (error) return (
-    <div className="report-error glass-card">
-      <AlertTriangle size={14} />
-      <span>{error}</span>
+    <div className="report-loading glass-card">
+      <Loader size={16} className="spin" />
+      <span>Preparing report — retrying…</span>
     </div>
   )
 

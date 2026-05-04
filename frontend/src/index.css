@@ -1188,3 +1188,88 @@ body {
   .sections-grid { grid-template-columns: 1fr; }
   .metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* === Cost Panel === */
+.cost-btn { opacity: 0.7; }
+.cost-btn:hover { opacity: 1; }
+
+.cost-panel-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 64px;
+}
+
+.cost-panel {
+  width: min(860px, 94vw);
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: 12px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+.cost-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+.cost-panel-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.95rem; font-weight: 600; color: var(--text);
+}
+
+.cost-periods-row {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+
+.cost-period-card {
+  padding: 14px; border-radius: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.cost-period-title {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); font-weight: 600;
+}
+
+.cost-period-total {
+  display: flex; align-items: baseline; gap: 8px;
+}
+
+.cost-total-amt {
+  font-size: 1.1rem; font-weight: 700; color: var(--accent);
+}
+
+.cost-total-calls {
+  font-size: 0.75rem; color: var(--text-muted);
+}
+
+.cost-model-table {
+  width: 100%; border-collapse: collapse; font-size: 0.75rem;
+}
+
+.cost-model-table th {
+  text-align: left; padding: 4px 6px;
+  color: var(--text-muted); font-weight: 500; border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+.cost-model-table td {
+  padding: 4px 6px; color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.cost-model-name { color: var(--text); font-weight: 500; }
+
+.cost-empty {
+  font-size: 0.78rem; color: var(--text-muted); font-style: italic;
+}
+
+.cost-history { padding: 14px; border-radius: 10px; }
+
+.cost-loading, .cost-error {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.82rem; color: var(--text-muted); padding: 12px;
+}
+
+.cost-error { color: var(--negative); }

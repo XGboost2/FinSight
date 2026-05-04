@@ -249,6 +249,24 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
 # ── Admin ────────────────────────────────────────────────────────────
 
 
+@router.get("/admin/costs")
+async def get_costs() -> dict:
+    """Return LLM API cost breakdown for today, this week, and this month."""
+    from datetime import datetime, timezone
+    from cache.cost_tracker import get_costs_for_period, get_last_n_days
+
+    redis = get_redis()
+    now = datetime.now(timezone.utc)
+
+    week_num = now.isocalendar()[1]
+    return {
+        "today":    get_costs_for_period(redis, "daily",   now.strftime("%Y-%m-%d")),
+        "week":     get_costs_for_period(redis, "weekly",  f"{now.year}-W{week_num:02d}"),
+        "month":    get_costs_for_period(redis, "monthly", now.strftime("%Y-%m")),
+        "last_7_days": get_last_n_days(redis, 7),
+    }
+
+
 @router.post("/admin/refresh-tickers")
 async def refresh_tickers() -> dict:
     """Manually trigger ticker cache refresh (normally runs at 2am UTC)."""

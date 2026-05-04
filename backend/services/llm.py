@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from config import get_settings
+from cache.cost_tracker import record_cost
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,13 @@ Question: {query}"""
         result["cost_usd"],
         result["latency_ms"],
     )
+
+    try:
+        from cache.redis_client import get_redis
+        record_cost(get_redis(), result["model_used"], result["cost_usd"], result["tokens_in"], result["tokens_out"])
+    except Exception:
+        pass  # cost tracking is non-critical
+
     return result
 
 
@@ -142,6 +150,8 @@ async def call_llm_raw(
     settings = get_settings()
     provider = _provider(model) if model else None
 
+    text, tok_in, tok_out, m = "", 0, 0, model or CHEAP_MODEL
+
     if (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
         from openai import AsyncOpenAI
         m = model or CHEAP_MODEL
@@ -150,9 +160,9 @@ async def call_llm_raw(
             model=m, max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, m
+        text, tok_in, tok_out = resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens
 
-    if (not model or provider == "anthropic") and settings.ANTHROPIC_API_KEY:
+    elif (not model or provider == "anthropic") and settings.ANTHROPIC_API_KEY:
         import anthropic
         m = model or "claude-haiku-4-5"
         client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -160,9 +170,9 @@ async def call_llm_raw(
             model=m, max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens, m
+        text, tok_in, tok_out = resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens
 
-    if (not model or provider == "openai") and settings.OPENAI_API_KEY:
+    elif (not model or provider == "openai") and settings.OPENAI_API_KEY:
         from openai import AsyncOpenAI
         m = model or "gpt-4o-mini"
         client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
@@ -170,9 +180,18 @@ async def call_llm_raw(
             model=m, max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens, m
+        text, tok_in, tok_out = resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens
 
-    raise RuntimeError("No LLM API key configured")
+    else:
+        raise RuntimeError("No LLM API key configured")
+
+    try:
+        from cache.redis_client import get_redis
+        record_cost(get_redis(), m, _calc_cost(m, tok_in, tok_out), tok_in, tok_out)
+    except Exception:
+        pass  # cost tracking is non-critical
+
+    return text, tok_in, tok_out, m
 
 
 async def _call_anthropic(
