@@ -16,7 +16,8 @@
     "lightweight-charts": "^4.2.0",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "react-resizable-panels": "^2.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

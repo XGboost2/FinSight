@@ -17,8 +17,15 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    Fusion,
+    FusionQuery,
     MatchValue,
+    Modifier,
     PointStruct,
+    Prefetch,
+    SparseIndexParams,
+    SparseVector,
+    SparseVectorParams,
     VectorParams,
 )
 
@@ -35,15 +42,23 @@ def _client() -> QdrantClient:
 
 
 def ensure_collection() -> None:
-    """Create the collection if it doesn't exist yet. Safe to call repeatedly."""
+    """Create hybrid collection (dense + sparse) if it doesn't exist."""
     client = _client()
     existing = {c.name for c in client.get_collections().collections}
     if COLLECTION not in existing:
         client.create_collection(
             collection_name=COLLECTION,
-            vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+            vectors_config={
+                "text-dense": VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+            },
+            sparse_vectors_config={
+                "text-sparse": SparseVectorParams(
+                    index=SparseIndexParams(on_disk=False),
+                    modifier=Modifier.IDF,
+                )
+            },
         )
-        logger.info("Created Qdrant collection '%s'", COLLECTION)
+        logger.info("Created hybrid Qdrant collection '%s' (dense 768-dim + sparse IDF)", COLLECTION)
 
 
 def _point_id(filing_id: str, chunk_index: int) -> str:
@@ -51,13 +66,24 @@ def _point_id(filing_id: str, chunk_index: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{filing_id}:{chunk_index}"))
 
 
-def upsert_chunks(filing_id: str, chunks: list[dict], embeddings: list[list[float]]) -> None:
-    """Store chunk vectors in Qdrant. Upsert = insert or overwrite."""
+def upsert_chunks(
+    filing_id: str,
+    chunks: list[dict],
+    embeddings: list[list[float]],
+    sparse_vectors: list[tuple[list[int], list[float]]],
+) -> None:
+    """Store dense + sparse vectors in Qdrant. Upsert = insert or overwrite."""
     client = _client()
     points = [
         PointStruct(
             id=_point_id(filing_id, chunk["chunk_index"]),
-            vector=embedding,
+            vector={
+                "text-dense": embedding,
+                "text-sparse": SparseVector(
+                    indices=sp_indices,
+                    values=sp_values,
+                ),
+            },
             payload={
                 "filing_id": filing_id,
                 "chunk_index": chunk["chunk_index"],
@@ -66,22 +92,43 @@ def upsert_chunks(filing_id: str, chunks: list[dict], embeddings: list[list[floa
                 "section": chunk.get("section", ""),
             },
         )
-        for chunk, embedding in zip(chunks, embeddings)
+        for chunk, embedding, (sp_indices, sp_values) in zip(chunks, embeddings, sparse_vectors)
     ]
     client.upsert(collection_name=COLLECTION, points=points)
     logger.info("Upserted %d chunks for filing %s", len(points), filing_id)
 
 
-def search(query_vector: list[float], filing_id: str, top_k: int = 5) -> list[dict]:
-    """Find the top-k chunks most semantically similar to the query."""
+def search(
+    query_vector: list[float],
+    query_sparse: tuple[list[int], list[float]],
+    filing_id: str,
+    top_k: int = 5,
+) -> list[dict]:
+    """Hybrid search: dense + sparse via Reciprocal Rank Fusion (RRF)."""
     client = _client()
+    filing_filter = Filter(
+        must=[FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
+    )
+    sp_indices, sp_values = query_sparse
     result = client.query_points(
         collection_name=COLLECTION,
-        query=query_vector,
-        query_filter=Filter(
-            must=[FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
-        ),
+        prefetch=[
+            Prefetch(
+                query=SparseVector(indices=sp_indices, values=sp_values),
+                using="text-sparse",
+                filter=filing_filter,
+                limit=top_k * 4,
+            ),
+            Prefetch(
+                query=query_vector,
+                using="text-dense",
+                filter=filing_filter,
+                limit=top_k * 4,
+            ),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),
         limit=top_k,
+        with_payload=True,
     )
     return [
         {

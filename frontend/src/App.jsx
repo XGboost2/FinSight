@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { TrendingUp, GitCompare, X, DollarSign } from 'lucide-react'
+import { TrendingUp, GitCompare, X, DollarSign, Sun, Moon } from 'lucide-react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import CompanySearch from './components/CompanySearch'
 import Dashboard from './components/Dashboard'
 import CompareView from './components/CompareView'
@@ -31,6 +32,36 @@ export default function App() {
   const [compareError, setCompareError] = useState(null)
 
   const [showCosts, setShowCosts] = useState(false)
+
+  // ── Theme: light by default 7am–7pm, dark otherwise; manual override persists ──
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('finsight-theme')
+    if (saved) return saved
+    const hour = new Date().getHours()
+    return (hour >= 19 || hour < 7) ? 'dark' : 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('finsight-theme', theme)
+  }, [theme])
+
+  // Auto-switch on the hour boundary (7am → light, 7pm → dark) if not manually overridden
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const saved = localStorage.getItem('finsight-theme-manual')
+      if (saved) return  // user made a manual choice — don't auto-switch
+      const hour = new Date().getHours()
+      setTheme(hour >= 19 || hour < 7 ? 'dark' : 'light')
+    }, 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const toggleTheme = () => {
+    const next = theme === 'light' ? 'dark' : 'light'
+    setTheme(next)
+    localStorage.setItem('finsight-theme-manual', '1')  // mark as manual override
+  }
 
   const handleSelectPrimary = async (company) => {
     setPrimary(company)
@@ -125,6 +156,9 @@ export default function App() {
         )}
 
         <StatusDots />
+        <button className="btn-icon" onClick={toggleTheme} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
+          {theme === 'light' ? <Moon size={15} /> : <Sun size={15} />}
+        </button>
         <button className="btn-icon cost-btn" onClick={() => setShowCosts(true)} title="LLM Cost Tracker">
           <DollarSign size={15} />
         </button>
@@ -132,7 +166,7 @@ export default function App() {
 
       {showCosts && <CostPanel onClose={() => setShowCosts(false)} />}
 
-      <main className={`layout ${showCompare ? 'layout-full' : ''}`}>
+      <main className="layout">
         {showCompare ? (
           <CompareView
             comparison={comparison}
@@ -141,34 +175,45 @@ export default function App() {
             onBack={exitCompare}
           />
         ) : (
-          <>
-            <section className="chart-col">
-              <Dashboard
-                company={primary}
-                dashboard={primaryDash}
-                loading={primaryLoading}
-                error={primaryError}
-              />
-              <ReportView
-                ticker={primary?.ticker ?? null}
-                ingesting={primaryLoading}
-              />
-            </section>
-            <aside className="filing-col">
-              <FilingPanel
-                ticker={primary?.ticker ?? null}
-                companyName={primary?.name ?? ''}
-                filingId={primaryFiling?.filing_id ?? null}
-                filing={primaryFiling ? {
-                  company_name: primary?.name,
-                  filing_type: '10-K',
-                  filed_date: primaryFiling.filed_date,
-                  chunk_count: primaryFiling.chunk_count,
-                } : null}
-                fetchingFiling={primaryLoading}
-              />
-            </aside>
-          </>
+          <PanelGroup direction="horizontal" className="panel-group">
+            {/* Left column: Dashboard + Report — original static layout */}
+            <Panel defaultSize={62} minSize={35} className="panel">
+              <div className="panel-scroll chart-col">
+                <Dashboard
+                  company={primary}
+                  dashboard={primaryDash}
+                  loading={primaryLoading}
+                  error={primaryError}
+                />
+                <ReportView
+                  ticker={primary?.ticker ?? null}
+                  ingesting={primaryLoading}
+                />
+              </div>
+            </Panel>
+
+            <PanelResizeHandle className="resize-handle resize-handle-v">
+              <div className="resize-handle-bar" />
+            </PanelResizeHandle>
+
+            {/* Right column: Chat — drag to resize */}
+            <Panel defaultSize={38} minSize={20} className="panel">
+              <div className="panel-scroll">
+                <FilingPanel
+                  ticker={primary?.ticker ?? null}
+                  companyName={primary?.name ?? ''}
+                  filingId={primaryFiling?.filing_id ?? null}
+                  filing={primaryFiling ? {
+                    company_name: primary?.name,
+                    filing_type: '10-K',
+                    filed_date: primaryFiling.filed_date,
+                    chunk_count: primaryFiling.chunk_count,
+                  } : null}
+                  fetchingFiling={primaryLoading}
+                />
+              </div>
+            </Panel>
+          </PanelGroup>
         )}
       </main>
     </div>

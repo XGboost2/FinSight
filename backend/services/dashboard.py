@@ -13,7 +13,7 @@ DASHBOARD_TTL = 60 * 60 * 24 * 7  # 7 days
 
 
 def _cache_key(ticker: str, filing_type: str = "10-K") -> str:
-    return f"{DASHBOARD_PREFIX}{ticker.upper()}:{filing_type.upper()}"
+    return f"{DASHBOARD_PREFIX}{filing_type.upper()}:{ticker.upper()}"
 
 
 async def get_or_extract_dashboard(

@@ -25,6 +25,7 @@ from models.schemas import (
     ChatResponse,
     CompanyInfo,
     CompareRequest,
+    ChangedParagraph,
     CompareResponse,
     DashboardResponse,
     FetchFilingRequest,
@@ -34,11 +35,14 @@ from models.schemas import (
     HealthResponse,
     IngestResponse,
     SearchResponse,
+    SectionDiff,
     SourceChunk,
+    YoYDiffResponse,
 )
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
+from services.diff import get_or_compute_diff
 from services.report import get_or_generate_report
 from ingestion.xbrl import get_revenue_trend
 from services.llm import ask_llm
@@ -208,6 +212,49 @@ async def get_report(ticker: str, refresh: bool = False) -> AnalysisReport:
     return AnalysisReport(**report)
 
 
+# ── YoY Diff ────────────────────────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/diff", response_model=YoYDiffResponse)
+async def get_yoy_diff(ticker: str, refresh: bool = False) -> YoYDiffResponse:
+    """Year-over-year 10-K diff: Business (Item 1), Risk Factors (Item 1A), MD&A (Item 7).
+
+    Fetches prior year 10-K from EDGAR, stores in Qdrant, computes semantic diff,
+    and summarises changes with LLM. Results cached 30 days in Redis.
+    Use ?refresh=true to force recompute.
+    """
+    ticker = ticker.upper()
+    logger.info("YoY diff request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+
+    if not is_ingested(redis, ticker):
+        raise HTTPException(404, f"No filing for '{ticker}'. Call /ingest first.")
+
+    try:
+        result = await get_or_compute_diff(redis, ticker, refresh=refresh)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error("Diff failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"Diff failed: {e}")
+
+    def _to_section(d: dict) -> SectionDiff:
+        if not d:
+            return SectionDiff()
+        changed = [ChangedParagraph(**c) if isinstance(c, dict) else c for c in d.get("changed", [])]
+        return SectionDiff(**{**d, "changed": changed})
+
+    logger.info("YoY diff served: %s (%s vs %s)", ticker, result["current_year"], result["prior_year"])
+    return YoYDiffResponse(
+        ticker=result["ticker"],
+        current_year=result["current_year"],
+        prior_year=result["prior_year"],
+        item_1=_to_section(result.get("item_1")),
+        item_1a=_to_section(result.get("item_1a")),
+        item_7=_to_section(result.get("item_7")),
+    )
+
+
 # ── Comparison Engine ────────────────────────────────────────────────
 
 
@@ -373,7 +420,27 @@ async def chat(request: ChatRequest) -> ChatResponse:
     record = get_filing_record(redis, request.ticker)
     filing_id = record["filing_id"]
 
-    relevant_chunks = rag_retrieve(request.question, filing_id, top_k=5)
+    # Multi-query retrieval — original question + section-targeted rephrasing
+    # prevents "outlook" questions from only matching risk factor chunks
+    section_queries = {
+        "outlook": "management discussion analysis future outlook guidance strategy",
+        "risk":    "risk factors material risks regulatory competition",
+        "revenue": "revenue growth financial performance results of operations",
+        "future":  "management discussion analysis future outlook guidance strategy",
+        "plan":    "management discussion analysis strategy future plans",
+        "expect":  "management discussion analysis outlook expectations guidance",
+    }
+    extra_query = next(
+        (v for k, v in section_queries.items() if k in request.question.lower()), None
+    )
+
+    seen: set = set()
+    relevant_chunks = []
+    for q in ([request.question] + ([extra_query] if extra_query else [])):
+        for c in rag_retrieve(q, filing_id, top_k=5):
+            if c["chunk_index"] not in seen:
+                seen.add(c["chunk_index"])
+                relevant_chunks.append(c)
 
     context = "\n\n---\n\n".join(
         f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks

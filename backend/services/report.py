@@ -20,7 +20,7 @@ REPORT_TTL = 60 * 60 * 24  # 24h — refresh daily
 
 
 def _cache_key(ticker: str, filing_type: str = "10-K") -> str:
-    return f"{REPORT_PREFIX}{ticker.upper()}:{filing_type.upper()}"
+    return f"{REPORT_PREFIX}{filing_type.upper()}:{ticker.upper()}"
 
 
 async def get_or_generate_report(

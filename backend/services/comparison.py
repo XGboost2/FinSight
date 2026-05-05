@@ -15,9 +15,9 @@ _PRICING = {
 }
 
 
-def _compare_key(t1: str, t2: str) -> str:
+def _compare_key(t1: str, t2: str, filing_type: str = "10-K") -> str:
     tickers = sorted([t1.upper(), t2.upper()])
-    return COMPARE_PREFIX + f"{tickers[0]}_{tickers[1]}"
+    return f"{COMPARE_PREFIX}{filing_type.upper()}:{tickers[0]}:{tickers[1]}"
 
 
 def _cost(model: str, tok_in: int, tok_out: int) -> float:
@@ -34,7 +34,7 @@ async def get_or_generate_comparison(
     metrics1: dict,
     metrics2: dict,
 ) -> dict:
-    key = _compare_key(ticker1, ticker2)
+    key = _compare_key(ticker1, ticker2, "10-K")
     cached = redis_client.get(key)
     if cached:
         logger.info("Compare cache hit: %s vs %s", ticker1, ticker2)

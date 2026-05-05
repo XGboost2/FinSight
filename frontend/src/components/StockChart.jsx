@@ -4,12 +4,33 @@ import { createChart } from 'lightweight-charts'
 const TIMEFRAMES = ['1D', '1W', '1M', 'YTD', '1Y', '5Y']
 
 const SERIES_OPTS = {
-  upColor: '#10b981',
-  downColor: '#ef4444',
-  borderUpColor: '#10b981',
-  borderDownColor: '#ef4444',
-  wickUpColor: '#10b981',
-  wickDownColor: '#ef4444',
+  upColor: '#0A7C42',
+  downColor: '#CC0000',
+  borderUpColor: '#0A7C42',
+  borderDownColor: '#CC0000',
+  wickUpColor: '#0A7C42',
+  wickDownColor: '#CC0000',
+}
+
+function getChartTheme() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark'
+  return dark ? {
+    layout: { background: { color: '#132030' }, textColor: '#9EB0C4' },
+    grid: {
+      vertLines: { color: 'rgba(100,160,220,0.06)' },
+      horzLines: { color: 'rgba(100,160,220,0.06)' },
+    },
+    rightPriceScale: { borderColor: 'rgba(100,160,220,0.14)' },
+    timeScale: { borderColor: 'rgba(100,160,220,0.14)', timeVisible: false, secondsVisible: false },
+  } : {
+    layout: { background: { color: '#FFFFFF' }, textColor: '#4D4845' },
+    grid: {
+      vertLines: { color: 'rgba(51,48,46,0.05)' },
+      horzLines: { color: 'rgba(51,48,46,0.05)' },
+    },
+    rightPriceScale: { borderColor: '#E8DDD0' },
+    timeScale: { borderColor: '#E8DDD0', timeVisible: false, secondsVisible: false },
+  }
 }
 
 function cutoffDate(tf) {
@@ -94,25 +115,18 @@ export default function StockChart({ ticker }) {
     if (!el) return
 
     const chart = createChart(el, {
-      layout: {
-        background: { color: '#0d1117' },
-        textColor: '#94a3b8',
-      },
-      grid: {
-        vertLines: { color: 'rgba(255,255,255,0.04)' },
-        horzLines: { color: 'rgba(255,255,255,0.04)' },
-      },
+      ...getChartTheme(),
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
-      timeScale: {
-        borderColor: 'rgba(255,255,255,0.08)',
-        timeVisible: false,
-        secondsVisible: false,
-      },
       width: el.clientWidth,
       height: 420,
     })
     chartRef.current = chart
+
+    // Reapply theme when user toggles day/night
+    const observer = new MutationObserver(() => {
+      if (chartRef.current) chartRef.current.applyOptions(getChartTheme())
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
     const ro = new ResizeObserver(() => {
       if (el && chartRef.current) {
@@ -122,6 +136,7 @@ export default function StockChart({ ticker }) {
     ro.observe(el)
 
     return () => {
+      observer.disconnect()
       ro.disconnect()
       chart.remove()
       chartRef.current = null

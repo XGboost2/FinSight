@@ -165,6 +165,46 @@ class AnalysisReport(BaseModel):
         return v if v is not None else []
 
 
+# === YoY Diff ===
+
+class ChangedParagraph(BaseModel):
+    current: str
+    prior: str
+    similarity: float = 0.0
+
+
+class SectionDiff(BaseModel):
+    section: str = ""
+    current_year: str = ""
+    prior_year: str = ""
+    summary: str = ""
+    new: list[str] = []
+    removed: list[str] = []
+    changed: list[ChangedParagraph] = []
+    unchanged_count: int = 0
+
+    @field_validator("new", "removed", mode="before")
+    @classmethod
+    def coerce_list(cls, v):
+        return v if v is not None else []
+
+    @field_validator("changed", mode="before")
+    @classmethod
+    def coerce_changed(cls, v):
+        if not v:
+            return []
+        return [ChangedParagraph(**i) if isinstance(i, dict) else i for i in v]
+
+
+class YoYDiffResponse(BaseModel):
+    ticker: str
+    current_year: str = ""
+    prior_year: str = ""
+    item_1:  SectionDiff = SectionDiff()
+    item_1a: SectionDiff = SectionDiff()
+    item_7:  SectionDiff = SectionDiff()
+
+
 # === Health ===
 
 class HealthResponse(BaseModel):
