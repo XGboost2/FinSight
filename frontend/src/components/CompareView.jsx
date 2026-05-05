@@ -1,48 +1,40 @@
-import { useEffect, useRef } from 'react'
-import { Loader, ArrowLeft } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Loader, ArrowLeft, Zap, Settings } from 'lucide-react'
 import ReportView from './ReportView'
+import StockChart from './StockChart'
 
-function TradingViewChart({ ticker }) {
+function TradingViewAdvanced({ ticker }) {
   const containerRef = useRef(null)
-
   useEffect(() => {
     if (!ticker || !containerRef.current) return
     const container = containerRef.current
     container.innerHTML = ''
-
+    const widgetId = `tv_cmp_${ticker}_${Date.now()}`
     const widgetDiv = document.createElement('div')
-    widgetDiv.id = `tv_cmp_${ticker}_${Date.now()}`
+    widgetDiv.id = widgetId
     widgetDiv.style.height = '100%'
     container.appendChild(widgetDiv)
-
-    const script = document.createElement('script')
-    script.src = 'https://s3.tradingview.com/tv.js'
-    script.async = true
-    script.onload = () => {
-      if (!window.TradingView) return
+    const mount = () => {
+      if (!window.TradingView || !document.getElementById(widgetId)) return
       new window.TradingView.widget({
-        autosize: true,
-        symbol: ticker,
-        interval: 'D',
-        timezone: 'Etc/UTC',
-        theme: 'dark',
-        style: '1',
-        locale: 'en',
-        toolbar_bg: '#0d111c',
-        enable_publishing: false,
-        hide_side_toolbar: true,
-        allow_symbol_change: false,
-        container_id: widgetDiv.id,
-        backgroundColor: 'rgba(8, 13, 26, 1)',
-        gridColor: 'rgba(255, 255, 255, 0.04)',
+        autosize: true, symbol: ticker, interval: 'D', timezone: 'Etc/UTC',
+        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+        style: '1', locale: 'en', enable_publishing: false,
+        hide_side_toolbar: true, allow_symbol_change: false, container_id: widgetId,
       })
     }
-    container.appendChild(script)
-
-    return () => { container.innerHTML = '' }
+    if (window.TradingView) { mount() } else {
+      const script = document.createElement('script')
+      script.src = 'https://s3.tradingview.com/tv.js'
+      script.async = true; script.onload = mount
+      document.head.appendChild(script)
+    }
+    return () => {
+      container.innerHTML = ''
+      document.querySelectorAll('[id^="tradingview_"]').forEach(el => el.remove())
+    }
   }, [ticker])
-
-  return <div ref={containerRef} className="tv-chart-container" />
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 }
 
 function parseNumber(val) {
@@ -81,6 +73,8 @@ function BarRow({ label, val1, val2, t1, t2 }) {
 }
 
 export default function CompareView({ comparison, loading, error, onBack }) {
+  const [advanced, setAdvanced] = useState(false)
+
   if (loading) {
     return (
       <div className="compare-loading">
@@ -110,24 +104,35 @@ export default function CompareView({ comparison, loading, error, onBack }) {
   return (
     <div className="compare-view">
       <div className="compare-header glass-card">
-        <button className="btn-back" onClick={onBack}>
-          <ArrowLeft size={14} /> Back
-        </button>
-        <span className="compare-title">
-          <strong>{ticker1}</strong> vs <strong>{ticker2}</strong>
-        </span>
+        <div className="compare-header-left">
+          <button className="btn-back" onClick={onBack}>
+            <ArrowLeft size={14} /> Back
+          </button>
+          <span className="compare-title">
+            <strong>{ticker1}</strong> vs <strong>{ticker2}</strong>
+          </span>
+        </div>
+        <div className="chart-toggle-group">
+          <button className={`toggle-btn ${!advanced ? 'active' : ''}`} onClick={() => setAdvanced(false)}>
+            <Zap size={14} /> Simple
+          </button>
+          <button className={`toggle-btn ${advanced ? 'active' : ''}`} onClick={() => setAdvanced(true)}>
+            <Settings size={14} /> Advanced
+          </button>
+        </div>
       </div>
 
       <div className="compare-charts">
         <div className="compare-chart-card glass-card">
           <div className="compare-chart-label">{ticker1}</div>
-          <TradingViewChart ticker={ticker1} />
+          {advanced ? <TradingViewAdvanced key={ticker1} ticker={ticker1} /> : <StockChart key={ticker1} ticker={ticker1} />}
         </div>
         <div className="compare-chart-card glass-card">
           <div className="compare-chart-label">{ticker2}</div>
-          <TradingViewChart ticker={ticker2} />
+          {advanced ? <TradingViewAdvanced key={ticker2} ticker={ticker2} /> : <StockChart key={ticker2} ticker={ticker2} />}
         </div>
       </div>
+
 
       <div className="compare-body">
         <div className="compare-bars glass-card">

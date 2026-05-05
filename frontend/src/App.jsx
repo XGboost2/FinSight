@@ -9,6 +9,13 @@ import FilingPanel from './components/FilingPanel'
 import StatusDots from './components/StatusDots'
 import ReportView from './components/ReportView'
 import CostPanel from './components/CostPanel'
+import LandingPage from './components/LandingPage'
+import AnalystSidebar from './components/AnalystSidebar'
+import NewsTab from './components/tabs/NewsTab'
+import SentimentTab from './components/tabs/SentimentTab'
+import RiskTab from './components/tabs/RiskTab'
+import TechnicalTab from './components/tabs/TechnicalTab'
+import BullBearTab from './components/tabs/BullBearTab'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -19,7 +26,7 @@ async function ingestAndDashboard(ticker) {
 }
 
 export default function App() {
-  const [primary, setPrimary] = useState(null)       // {ticker, name, cik}
+  const [primary, setPrimary] = useState(null)
   const [primaryFiling, setPrimaryFiling] = useState(null)
   const [primaryDash, setPrimaryDash] = useState(null)
   const [primaryLoading, setPrimaryLoading] = useState(false)
@@ -32,8 +39,8 @@ export default function App() {
   const [compareError, setCompareError] = useState(null)
 
   const [showCosts, setShowCosts] = useState(false)
+  const [activeAnalyst, setActiveAnalyst] = useState('fundamentals')
 
-  // ── Theme: light by default 7am–7pm, dark otherwise; manual override persists ──
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('finsight-theme')
     if (saved) return saved
@@ -46,11 +53,10 @@ export default function App() {
     localStorage.setItem('finsight-theme', theme)
   }, [theme])
 
-  // Auto-switch on the hour boundary (7am → light, 7pm → dark) if not manually overridden
   useEffect(() => {
     const interval = setInterval(() => {
       const saved = localStorage.getItem('finsight-theme-manual')
-      if (saved) return  // user made a manual choice — don't auto-switch
+      if (saved) return
       const hour = new Date().getHours()
       setTheme(hour >= 19 || hour < 7 ? 'dark' : 'light')
     }, 60 * 1000)
@@ -60,7 +66,7 @@ export default function App() {
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light'
     setTheme(next)
-    localStorage.setItem('finsight-theme-manual', '1')  // mark as manual override
+    localStorage.setItem('finsight-theme-manual', '1')
   }
 
   const handleSelectPrimary = async (company) => {
@@ -71,6 +77,8 @@ export default function App() {
     setPrimaryLoading(true)
     setComparison(null)
     setCompareCompany(null)
+    setCompareMode(false)
+    setActiveAnalyst('fundamentals')
 
     try {
       const { ingest, dashboard } = await ingestAndDashboard(company.ticker)
@@ -109,51 +117,58 @@ export default function App() {
     setCompareError(null)
   }
 
+  const goHome = () => {
+    setPrimary(null)
+    setPrimaryFiling(null)
+    setPrimaryDash(null)
+    setPrimaryError(null)
+    setActiveAnalyst('fundamentals')
+    exitCompare()
+  }
+
   const showCompare = compareMode && (compareLoading || comparison || compareError)
+
+  if (!primary) {
+    return (
+      <div className="app">
+        <LandingPage onSelect={handleSelectPrimary} theme={theme} onToggleTheme={toggleTheme} />
+      </div>
+    )
+  }
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
+        <button className="brand brand-btn" onClick={goHome} title="Back to home">
           <TrendingUp size={20} />
           <span>FinSight</span>
-        </div>
+        </button>
 
         <CompanySearch
           onSelect={handleSelectPrimary}
           placeholder="Search company (e.g. Apple, AAPL)…"
         />
 
-        {primary && !compareMode && (
-          <button
-            className="btn-compare"
-            onClick={() => setCompareMode(true)}
-            title="Compare with another company"
-          >
-            <GitCompare size={14} />
-            Compare
+        {!compareMode && (
+          <button className="btn-compare" onClick={() => setCompareMode(true)} title="Compare with another company">
+            <GitCompare size={14} /> Compare
           </button>
         )}
 
         {compareMode && (
           <>
             <span className="compare-vs">vs</span>
-            <CompanySearch
-              onSelect={handleSelectCompare}
-              placeholder="Add company to compare…"
-            />
+            <CompanySearch onSelect={handleSelectCompare} placeholder="Add company to compare…" />
             <button className="btn-icon" onClick={exitCompare} title="Exit compare mode">
               <X size={16} />
             </button>
           </>
         )}
 
-        {primary && (
-          <div className="active-ticker">
-            <span className="ticker-sym">{primary.ticker}</span>
-            <span className="ticker-co">{primary.name}</span>
-          </div>
-        )}
+        <div className="active-ticker">
+          <span className="ticker-sym">{primary.ticker}</span>
+          <span className="ticker-co">{primary.name}</span>
+        </div>
 
         <StatusDots />
         <button className="btn-icon" onClick={toggleTheme} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
@@ -175,45 +190,56 @@ export default function App() {
             onBack={exitCompare}
           />
         ) : (
-          <PanelGroup direction="horizontal" className="panel-group">
-            {/* Left column: Dashboard + Report — original static layout */}
-            <Panel defaultSize={62} minSize={35} className="panel">
-              <div className="panel-scroll chart-col">
-                <Dashboard
-                  company={primary}
-                  dashboard={primaryDash}
-                  loading={primaryLoading}
-                  error={primaryError}
-                />
-                <ReportView
-                  ticker={primary?.ticker ?? null}
-                  ingesting={primaryLoading}
-                />
-              </div>
-            </Panel>
+          <div className="workspace">
+            <AnalystSidebar activeTab={activeAnalyst} onTabChange={setActiveAnalyst} />
 
-            <PanelResizeHandle className="resize-handle resize-handle-v">
-              <div className="resize-handle-bar" />
-            </PanelResizeHandle>
+            <PanelGroup direction="horizontal" className="panel-group">
+              <Panel defaultSize={62} minSize={35} className="panel">
+                <div className="panel-scroll chart-col">
+                  {activeAnalyst === 'fundamentals' && (
+                    <>
+                      <Dashboard
+                        company={primary}
+                        dashboard={primaryDash}
+                        loading={primaryLoading}
+                        error={primaryError}
+                      />
+                      <ReportView
+                        ticker={primary?.ticker ?? null}
+                        ingesting={primaryLoading}
+                      />
+                    </>
+                  )}
+                  {activeAnalyst === 'news'      && <NewsTab      ticker={primary.ticker} />}
+                  {activeAnalyst === 'sentiment' && <SentimentTab ticker={primary.ticker} />}
+                  {activeAnalyst === 'risk'      && <RiskTab      ticker={primary.ticker} />}
+                  {activeAnalyst === 'technical' && <TechnicalTab ticker={primary.ticker} />}
+                  {activeAnalyst === 'bullbear'  && <BullBearTab  ticker={primary.ticker} />}
+                </div>
+              </Panel>
 
-            {/* Right column: Chat — drag to resize */}
-            <Panel defaultSize={38} minSize={20} className="panel">
-              <div className="panel-scroll">
-                <FilingPanel
-                  ticker={primary?.ticker ?? null}
-                  companyName={primary?.name ?? ''}
-                  filingId={primaryFiling?.filing_id ?? null}
-                  filing={primaryFiling ? {
-                    company_name: primary?.name,
-                    filing_type: '10-K',
-                    filed_date: primaryFiling.filed_date,
-                    chunk_count: primaryFiling.chunk_count,
-                  } : null}
-                  fetchingFiling={primaryLoading}
-                />
-              </div>
-            </Panel>
-          </PanelGroup>
+              <PanelResizeHandle className="resize-handle resize-handle-v">
+                <div className="resize-handle-bar" />
+              </PanelResizeHandle>
+
+              <Panel defaultSize={38} minSize={20} className="panel">
+                <div className="panel-scroll">
+                  <FilingPanel
+                    ticker={primary?.ticker ?? null}
+                    companyName={primary?.name ?? ''}
+                    filingId={primaryFiling?.filing_id ?? null}
+                    filing={primaryFiling ? {
+                      company_name: primary?.name,
+                      filing_type: '10-K',
+                      filed_date: primaryFiling.filed_date,
+                      chunk_count: primaryFiling.chunk_count,
+                    } : null}
+                    fetchingFiling={primaryLoading}
+                  />
+                </div>
+              </Panel>
+            </PanelGroup>
+          </div>
         )}
       </main>
     </div>

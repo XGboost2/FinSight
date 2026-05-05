@@ -378,14 +378,31 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
       )}
 
       {/* Verdict — always visible */}
-      {report.verdict && (
-        <div className="verdict-box glass-card">
-          <div className="section-label">
-            <CheckCircle size={12} /> Verdict
+      {report.verdict && (() => {
+        const risk = report.risk_score ?? 0.5
+        const sent = report.sentiment_score ?? 0.5
+        const isPos = risk < 0.35 && sent >= 0.55
+        const isNeg = risk > 0.6 || sent < 0.4
+        const signal = isPos ? 'positive' : isNeg ? 'negative' : 'neutral'
+        return (
+          <div className={`verdict-box glass-card verdict-${signal}`}>
+            <div className="verdict-header">
+              <div className="section-label">
+                <CheckCircle size={12} /> Verdict
+              </div>
+              <div className={`verdict-signal verdict-signal-${signal}`}>
+                {isPos
+                  ? <><TrendingUp  size={14} /> Positive outlook</>
+                  : isNeg
+                  ? <><TrendingDown size={14} /> Negative outlook</>
+                  : <><span style={{ fontSize: '1rem', lineHeight: 1 }}>—</span> Neutral</>
+                }
+              </div>
+            </div>
+            <p className="verdict-text">{report.verdict}</p>
           </div>
-          <p className="verdict-text">{report.verdict}</p>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

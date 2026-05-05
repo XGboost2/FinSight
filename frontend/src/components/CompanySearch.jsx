@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback } from 'react'
-import { Search, Loader } from 'lucide-react'
+import { Search, ArrowRight } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-export default function CompanySearch({ onSelect, placeholder = 'Search companyâ€¦', disabled = false }) {
+export default function CompanySearch({ onSelect, placeholder = 'Search companyâ€¦', disabled = false, variant = 'default' }) {
+  const isLanding = variant === 'landing'
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
@@ -47,9 +48,9 @@ export default function CompanySearch({ onSelect, placeholder = 'Search companyâ
   }
 
   return (
-    <div className="cs-container" ref={containerRef} onBlur={handleBlur}>
-      <div className="search-box">
-        <Search size={15} className="search-icon" />
+    <div className={`cs-container${isLanding ? ' cs-landing' : ''}`} ref={containerRef} onBlur={handleBlur}>
+      <div className={`search-box${isLanding ? ' search-box-landing' : ''}`}>
+        {!isLanding && <Search size={15} className="search-icon" />}
         <input
           type="text"
           value={query}
@@ -58,12 +59,23 @@ export default function CompanySearch({ onSelect, placeholder = 'Search companyâ
           placeholder={placeholder}
           className="search-input"
           disabled={disabled}
+          autoFocus={isLanding}
         />
         {loading && <div className="search-spinner" />}
+        {isLanding && (
+          <button
+            className="landing-search-btn"
+            onClick={() => results.length > 0 && handleSelect(results[0])}
+            disabled={results.length === 0}
+            title="Analyze"
+          >
+            <ArrowRight size={18} />
+          </button>
+        )}
       </div>
 
       {results.length > 0 && (
-        <ul className="suggestions">
+        <ul className={`suggestions${isLanding ? ' suggestions-landing' : ''}`}>
           {results.map(r => (
             <li
               key={r.ticker}

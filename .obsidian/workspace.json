@@ -178,9 +178,19 @@
   },
   "active": "1a791f527527cedd",
   "lastOpenFiles": [
-    "backend/services/__pycache__/report.cpython-310.pyc",
-    "frontend/src/components/ReportView.jsx",
-    "backend/services/report.py",
-    "LLM Wiki"
+    "backend/services/diff.py",
+    "backend/ingestion/sections.py",
+    "LEARNINGS.md",
+    "INTERVIEW_PREP.md",
+    "HYBRID_SEARCH.md",
+    "backend/agents/edgar_agent.py",
+    "backend/agents/__init__.py",
+    "backend/agents",
+    "graphify-out/cache/35b87da3a322916a5f80ee11afdee95ffc3291bc63d7ce46968d88408e2fcf7f.json",
+    "graphify-out/cache/7cefa94aab65b9449754f4a1cee1aa16e00dd3025cf2357411313753f31ecec9.json",
+    "graphify-out/cache/c9f227513f19b3bb0e2d0320bbe54d3d496226e0ae4d9d324f1e2efa78a0d838.json",
+    "graphify-out/cache/4ecb76a7834278acd2dc2f8f44fe9801e94e84c11cb52788944d6b1e5f7698b4.json",
+    "graphify-out/cache/09a3e8dd89c3f67e0814e67631c65cbcbbfb1e5f3197170396c092ce32465fa5.json",
+    "graphify-out/cache/3d349e12915a657444e142c2303ba48fd71cc47e5c432d402373f925faef2010.json"
   ]
 }

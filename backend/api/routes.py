@@ -503,3 +503,5 @@ async def health() -> HealthResponse:
         redis_ok=redis_ok,
         qdrant_ok=qdrant_ok,
     )
+
+

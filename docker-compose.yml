@@ -37,6 +37,7 @@ services:
     environment:
       - CHOKIDAR_USEPOLLING=true
       - VITE_API_URL=http://localhost:8000
+      - VITE_ALPHA_VANTAGE_KEY=${VITE_ALPHA_VANTAGE_KEY}
     depends_on:
       - backend
     restart: unless-stopped
