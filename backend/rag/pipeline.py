@@ -12,7 +12,7 @@ RRF (Reciprocal Rank Fusion): merges dense + sparse ranked lists into final top-
 import logging
 
 from rag.embedder import embed_documents, embed_query, sparse_encode
-from rag.retriever import ensure_collection, search, upsert_chunks
+from rag.retriever import ensure_collection, search, search_multi, upsert_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,21 @@ def retrieve(question: str, filing_id: str, top_k: int = 5) -> list[dict]:
         "RAG retrieve: %d chunks for filing %s (top score: %s)",
         len(chunks),
         filing_id,
+        chunks[0]["score"] if chunks else "n/a",
+    )
+    return chunks
+
+
+def retrieve_multi(question: str, filing_ids: list[str], top_k: int = 5) -> list[dict]:
+    """Hybrid search across multiple filing IDs (10-K + 10-Q together)."""
+    if not filing_ids:
+        return []
+    query_vector = embed_query(question)
+    query_sparse = sparse_encode(question)
+    chunks = search_multi(query_vector, query_sparse, filing_ids, top_k=top_k)
+    logger.info(
+        "RAG retrieve_multi: %d chunks across %d filings (top score: %s)",
+        len(chunks), len(filing_ids),
         chunks[0]["score"] if chunks else "n/a",
     )
     return chunks

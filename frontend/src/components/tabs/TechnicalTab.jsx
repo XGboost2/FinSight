@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { LineChart, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 const INDICATORS = [
@@ -21,7 +22,8 @@ const SIGNAL_CLASS = {
   neutral:  'tech-badge-neu',
 }
 
-export default function TechnicalTab({ ticker }) {
+export default function TechnicalTab({ ticker, onStatusChange }) {
+  useEffect(() => { onStatusChange?.('done') }, [])
   return (
     <div className="tab-view">
       <div className="tab-agent-header glass-card">

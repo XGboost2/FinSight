@@ -42,6 +42,7 @@ async def resolve_ticker_to_cik(ticker: str) -> dict[str, Any] | None:
     """
     headers = await _get_headers()
     async with httpx.AsyncClient() as client:
+        await asyncio.sleep(_rate_limit_delay)
         resp = await client.get(EDGAR_COMPANY_TICKERS, headers=headers)
         resp.raise_for_status()
         data = resp.json()
@@ -82,6 +83,7 @@ async def fetch_filing_urls(
     accession_numbers = recent.get("accessionNumber", [])
     filing_dates = recent.get("filingDate", [])
     primary_docs = recent.get("primaryDocument", [])
+    items_list = recent.get("items", [""] * len(forms))  # 8-K item numbers e.g. "2.02,9.01"
 
     results: list[dict[str, str]] = []
     for i, form in enumerate(forms):
@@ -92,6 +94,7 @@ async def fetch_filing_urls(
                 "accession_number": accession_numbers[i],
                 "filing_date": filing_dates[i],
                 "document_url": doc_url,
+                "items": items_list[i] if i < len(items_list) else "",
             })
 
     logger.info(

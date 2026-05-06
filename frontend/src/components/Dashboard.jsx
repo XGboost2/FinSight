@@ -67,7 +67,7 @@ function isPositive(val) {
   return val.startsWith('+') ? true : val.startsWith('-') ? false : undefined
 }
 
-export default function Dashboard({ company, dashboard, loading, error }) {
+export default function Dashboard({ company, dashboard, loading, loadingStep, error }) {
   const [advanced, setAdvanced] = useState(false)
   if (!company) return null
   const { ticker, name } = company
@@ -92,7 +92,7 @@ export default function Dashboard({ company, dashboard, loading, error }) {
         {loading && (
           <div className="dashboard-loading">
             <Loader size={14} className="spin" />
-            <span>Fetching &amp; analysing 10-K…</span>
+            <span>{loadingStep || 'Fetching filings…'}</span>
           </div>
         )}
         {error && <div className="dashboard-error">{error}</div>}

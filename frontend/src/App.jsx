@@ -18,9 +18,33 @@ import TechnicalTab from './components/tabs/TechnicalTab'
 import BullBearTab from './components/tabs/BullBearTab'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const POLL_INTERVAL = 3000   // 3s polling for task status
+const POLL_TIMEOUT  = 300000 // 5 min max wait
 
-async function ingestAndDashboard(ticker) {
+async function pollIngestStatus(ticker, taskId, onStep) {
+  const start = Date.now()
+  while (Date.now() - start < POLL_TIMEOUT) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL))
+    const { data } = await axios.get(`${API_URL}/api/companies/${ticker}/ingest/status?task_id=${taskId}`)
+    if (data.step) onStep(data.step)
+    if (data.status === 'done')  return data.result
+    if (data.status === 'error') throw new Error(data.error || 'Ingest failed')
+  }
+  throw new Error('Ingest timed out after 5 minutes')
+}
+
+async function ingestAndDashboard(ticker, onStep) {
   const { data: ingest } = await axios.post(`${API_URL}/api/companies/${ticker}/ingest`)
+
+  if (ingest.status !== 'cached' && ingest.task_id) {
+    onStep('Fetching 10-K, 10-Q and 8-K from SEC EDGAR…')
+    await pollIngestStatus(ticker, ingest.task_id, onStep)
+    // Re-call ingest — now returns cached with real filing_id, chunk_count, filed_date
+    const { data: cached } = await axios.post(`${API_URL}/api/companies/${ticker}/ingest`)
+    const { data: dash } = await axios.get(`${API_URL}/api/companies/${ticker}/dashboard`)
+    return { ingest: cached, dashboard: dash }
+  }
+
   const { data: dash } = await axios.get(`${API_URL}/api/companies/${ticker}/dashboard`)
   return { ingest, dashboard: dash }
 }
@@ -30,6 +54,7 @@ export default function App() {
   const [primaryFiling, setPrimaryFiling] = useState(null)
   const [primaryDash, setPrimaryDash] = useState(null)
   const [primaryLoading, setPrimaryLoading] = useState(false)
+  const [primaryStep, setPrimaryStep] = useState('')
   const [primaryError, setPrimaryError] = useState(null)
 
   const [compareMode, setCompareMode] = useState(false)
@@ -40,6 +65,10 @@ export default function App() {
 
   const [showCosts, setShowCosts] = useState(false)
   const [activeAnalyst, setActiveAnalyst] = useState('fundamentals')
+  const [tabStatus, setTabStatus] = useState({})
+
+  const updateTabStatus = (tab, status) =>
+    setTabStatus(prev => ({ ...prev, [tab]: status }))
 
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('finsight-theme')
@@ -75,19 +104,25 @@ export default function App() {
     setPrimaryDash(null)
     setPrimaryError(null)
     setPrimaryLoading(true)
+    setPrimaryStep('Queuing EDGAR agent…')
     setComparison(null)
     setCompareCompany(null)
     setCompareMode(false)
     setActiveAnalyst('fundamentals')
+    setTabStatus({})
 
     try {
-      const { ingest, dashboard } = await ingestAndDashboard(company.ticker)
+      const { ingest, dashboard } = await ingestAndDashboard(
+        company.ticker,
+        (step) => setPrimaryStep(step),
+      )
       setPrimaryFiling(ingest)
       setPrimaryDash(dashboard)
     } catch (e) {
-      setPrimaryError(e.response?.data?.detail || 'Failed to load filing.')
+      setPrimaryError(e.response?.data?.detail || e.message || 'Failed to load filing.')
     } finally {
       setPrimaryLoading(false)
+      setPrimaryStep('')
     }
   }
 
@@ -191,7 +226,7 @@ export default function App() {
           />
         ) : (
           <div className="workspace">
-            <AnalystSidebar activeTab={activeAnalyst} onTabChange={setActiveAnalyst} />
+            <AnalystSidebar activeTab={activeAnalyst} onTabChange={setActiveAnalyst} tabStatus={tabStatus} />
 
             <PanelGroup direction="horizontal" className="panel-group">
               <Panel defaultSize={62} minSize={35} className="panel">
@@ -202,19 +237,21 @@ export default function App() {
                         company={primary}
                         dashboard={primaryDash}
                         loading={primaryLoading}
+                        loadingStep={primaryStep}
                         error={primaryError}
                       />
                       <ReportView
                         ticker={primary?.ticker ?? null}
                         ingesting={primaryLoading}
+                        onStatusChange={s => updateTabStatus('fundamentals', s)}
                       />
                     </>
                   )}
-                  {activeAnalyst === 'news'      && <NewsTab      ticker={primary.ticker} />}
-                  {activeAnalyst === 'sentiment' && <SentimentTab ticker={primary.ticker} />}
-                  {activeAnalyst === 'risk'      && <RiskTab      ticker={primary.ticker} />}
-                  {activeAnalyst === 'technical' && <TechnicalTab ticker={primary.ticker} />}
-                  {activeAnalyst === 'bullbear'  && <BullBearTab  ticker={primary.ticker} />}
+                  {activeAnalyst === 'news'      && <NewsTab      ticker={primary.ticker} onStatusChange={s => updateTabStatus('news', s)} />}
+                  {activeAnalyst === 'sentiment' && <SentimentTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('sentiment', s)} />}
+                  {activeAnalyst === 'risk'      && <RiskTab      ticker={primary.ticker} onStatusChange={s => updateTabStatus('risk', s)} />}
+                  {activeAnalyst === 'technical' && <TechnicalTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('technical', s)} />}
+                  {activeAnalyst === 'bullbear'  && <BullBearTab  ticker={primary.ticker} onStatusChange={s => updateTabStatus('bullbear', s)} />}
                 </div>
               </Panel>
 

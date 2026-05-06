@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Newspaper, TrendingUp, TrendingDown, Minus, ExternalLink, Clock } from 'lucide-react'
 
 const MOCK_HEADLINES = [
@@ -14,7 +15,8 @@ const SENTIMENT_ICON = {
   neutral:  <Minus       size={13} className="news-sent-neu" />,
 }
 
-export default function NewsTab({ ticker }) {
+export default function NewsTab({ ticker, onStatusChange }) {
+  useEffect(() => { onStatusChange?.('done') }, [])
   return (
     <div className="tab-view">
       <div className="tab-agent-header glass-card">

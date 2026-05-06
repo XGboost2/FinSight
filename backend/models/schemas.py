@@ -155,11 +155,12 @@ class AnalysisReport(BaseModel):
     management_themes: str = ""
     bull_case: list[str] = []
     bear_case: list[str] = []
+    debate_transcript: list[dict] = []   # [{role, argument}] — LLM-simulated, replaced by CrewAI in Feature 3c
     verdict: str = ""
     financial_data: dict = {}
     error: str | None = None
 
-    @field_validator("risk_factors", "bull_case", "bear_case", "findings_table", mode="before")
+    @field_validator("risk_factors", "bull_case", "bear_case", "findings_table", "debate_transcript", mode="before")
     @classmethod
     def none_to_empty(cls, v):
         return v if v is not None else []

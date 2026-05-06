@@ -1,77 +1,111 @@
-import { Scale, TrendingUp, TrendingDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Scale, TrendingUp, TrendingDown, Loader, AlertTriangle, MessageSquare } from 'lucide-react'
+import axios from 'axios'
 
-const BULL_POINTS = [
-  'Services revenue growing at 14% YoY, now 22% of total — high-margin, recurring stream reduces hardware cyclicality.',
-  'Gross margin expanded 80bps to 44.1% despite inflationary environment, demonstrating strong pricing power.',
-  'Free cash flow of $111B enables aggressive buybacks, reducing share count by 3% annually.',
-  'AI integration across product line creates new upgrade supercycle not yet reflected in consensus estimates.',
-  'India and Southeast Asia expansion represent a multi-year growth runway in underpenetrated markets.',
-]
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-const BEAR_POINTS = [
-  'China revenue declined 13% YoY — accounts for 19% of total revenue and faces ongoing geopolitical risk.',
-  'iPhone unit volumes flat for 3 consecutive years; installed base growth has stalled in developed markets.',
-  'EU Digital Markets Act designates company as gatekeeper — potential loss of App Store revenue.',
-  'Valuation at 28x forward earnings leaves little margin of safety if macro environment deteriorates.',
-  'R&D spend as % of revenue is lowest among mega-cap tech peers — long-term innovation risk.',
-]
+const ROLE_STYLES = {
+  Bull: { cls: 'debate-bull-msg',  icon: <TrendingUp  size={13} />, label: 'Bull' },
+  Bear: { cls: 'debate-bear-msg',  icon: <TrendingDown size={13} />, label: 'Bear' },
+}
 
-export default function BullBearTab({ ticker }) {
+export default function BullBearTab({ ticker, onStatusChange }) {
+  const [report,  setReport]  = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState(null)
+
+  useEffect(() => {
+    if (!ticker) return
+    setLoading(true)
+    setError(null)
+    onStatusChange?.('loading')
+    axios.get(`${API_URL}/api/companies/${ticker}/report`)
+      .then(r => { setReport(r.data); onStatusChange?.('done') })
+      .catch(e => { setError(e.response?.data?.detail || 'Failed to load analysis.'); onStatusChange?.('error') })
+      .finally(() => setLoading(false))
+  }, [ticker])
+
+  if (loading) return (
+    <div className="tab-view">
+      <div className="report-loading glass-card"><Loader size={14} className="spin" /><span>Loading debate…</span></div>
+    </div>
+  )
+  if (error) return (
+    <div className="tab-view">
+      <div className="report-error glass-card"><AlertTriangle size={14} /><span>{error}</span></div>
+    </div>
+  )
+
   return (
     <div className="tab-view">
       <div className="tab-agent-header glass-card">
         <div className="tab-agent-identity">
           <Scale size={18} className="tab-agent-icon" />
           <div>
-            <span className="tab-agent-name">Bull vs Bear Debate</span>
-            <span className="tab-agent-source">CrewAI · Bull Researcher · Bear Researcher</span>
+            <span className="tab-agent-name">Bull vs Bear</span>
+            <span className="tab-agent-source">LLM-simulated debate · grounded in 10-K</span>
           </div>
         </div>
-        <span className="tab-agent-badge badge-pending">Backend pending</span>
+        <span className="tab-agent-badge badge-live">Live</span>
       </div>
 
-      <div className="debate-grid">
-        {/* Bull */}
-        <div className="tab-section glass-card debate-bull">
-          <div className="section-label bull-label">
-            <TrendingUp size={13} /> Bull Case
+      {report && (
+        <>
+          <div className="debate-grid">
+            <div className="tab-section glass-card debate-bull">
+              <div className="section-label bull-label"><TrendingUp size={13} /> Bull Case</div>
+              <ul className="case-list">
+                {(report.bull_case ?? []).map((pt, i) => (
+                  <li key={i} className="case-item case-item-bull debate-case-item">
+                    <span className="debate-num">{i + 1}</span>
+                    <span>{pt}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="tab-section glass-card debate-bear">
+              <div className="section-label bear-label"><TrendingDown size={13} /> Bear Case</div>
+              <ul className="case-list">
+                {(report.bear_case ?? []).map((pt, i) => (
+                  <li key={i} className="case-item case-item-bear debate-case-item">
+                    <span className="debate-num">{i + 1}</span>
+                    <span>{pt}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-          <ul className="case-list">
-            {BULL_POINTS.map((pt, i) => (
-              <li key={i} className="case-item case-item-bull debate-case-item">
-                <span className="debate-num">{i + 1}</span>
-                <span>{pt}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
 
-        {/* Bear */}
-        <div className="tab-section glass-card debate-bear">
-          <div className="section-label bear-label">
-            <TrendingDown size={13} /> Bear Case
-          </div>
-          <ul className="case-list">
-            {BEAR_POINTS.map((pt, i) => (
-              <li key={i} className="case-item case-item-bear debate-case-item">
-                <span className="debate-num">{i + 1}</span>
-                <span>{pt}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+          {report.debate_transcript?.length > 0 && (
+            <div className="tab-section glass-card">
+              <div className="section-label">
+                <MessageSquare size={12} /> Debate Transcript
+              </div>
+              <div className="debate-transcript">
+                {report.debate_transcript.map((turn, i) => {
+                  const style = ROLE_STYLES[turn.role] || ROLE_STYLES.Bull
+                  return (
+                    <div key={i} className={`debate-turn ${style.cls}`}>
+                      <div className="debate-turn-role">
+                        {style.icon} {style.label}
+                      </div>
+                      <p className="debate-turn-text">{turn.argument}</p>
+                    </div>
+                  )
+                })}
+              </div>
+              <p className="tab-placeholder-note" style={{ marginTop: '0.75rem' }}>
+                Feature 3c: CrewAI Bull + Bear researcher agents will replace this with multi-turn reasoning and filing tool access.
+              </p>
+            </div>
+          )}
+        </>
+      )}
 
-      <div className="tab-section glass-card debate-transcript-placeholder">
-        <div className="section-label">Debate Transcript</div>
-        <p className="report-prose" style={{ fontStyle: 'italic', opacity: 0.6 }}>
-          The Bull and Bear researchers will exchange 2 rounds of structured arguments, each challenging the other's strongest point. The full debate transcript will appear here when the CrewAI agents are connected.
-        </p>
-      </div>
-
-      <div className="tab-placeholder-note">
-        Debate arguments will be generated by CrewAI Bull and Bear researcher agents reading all analyst reports as context.
-      </div>
+      {!report && !loading && (
+        <div className="tab-placeholder-note">Run analysis on the Fundamentals tab first.</div>
+      )}
     </div>
   )
 }

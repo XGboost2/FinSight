@@ -87,78 +87,106 @@ async def get_company_info(ticker: str) -> CompanyInfo:
     return CompanyInfo(**info)
 
 
-# ── Ingest Pipeline ──────────────────────────────────────────────────
+# ── Ingest Pipeline (Celery + EDGAR Pipeline) ────────────────────────
 
 
-async def _run_ingest(ticker: str, force: bool = False) -> dict:
-    """Shared ingest logic: registry gate → EDGAR → chunk → Qdrant → dashboard."""
+@router.post("/companies/{ticker}/ingest")
+async def ingest_company(ticker: str, force: bool = False):
+    """
+    Queue EDGAR ingestion as a Celery background task.
+    Returns task_id immediately. Poll /ingest/status?task_id=... for progress.
+    If already fully ingested and force=False, returns cached result instantly.
+    """
+    from tasks.edgar_tasks import ingest_company_filings
+    from celery.result import AsyncResult
+
     ticker = ticker.upper()
     redis = get_redis()
 
-    if is_ingested(redis, ticker) and not force:
-        record = get_filing_record(redis, ticker)
-        filing = get_filing_by_ticker(ticker)
-        logger.info("Ingest skipped (already exists): %s chunks=%d", ticker, record["chunk_count"])
+    ALL_TYPES = ("10-K", "10-Q", "8-K")
+    missing = [ft for ft in ALL_TYPES if force or not is_ingested(redis, ticker, ft)]
+
+    ten_k_record = get_filing_record(redis, ticker, "10-K")
+    ten_k_filing  = get_filing_by_ticker(ticker) if ten_k_record else None
+
+    # Nothing missing — return immediately
+    if not missing:
+        logger.info("Ingest cached (all types): %s", ticker)
         return {
             "ticker": ticker,
-            "filing_id": record["filing_id"],
-            "chunk_count": record["chunk_count"],
+            "task_id": None,
+            "status": "cached",
+            "filing_id":     ten_k_record["filing_id"] if ten_k_record else None,
+            "chunk_count":   ten_k_record["chunk_count"] if ten_k_record else 0,
             "already_existed": True,
-            "company_name": filing.get("company_name", "") if filing else "",
-            "filed_date": record.get("filed_date", ""),
+            "company_name":  (ten_k_filing or {}).get("company_name", ""),
+            "filed_date":    (ten_k_record or {}).get("filed_date", ""),
         }
 
-    logger.info("Ingest start: %s", ticker)
-    result = await fetch_and_extract(ticker, "10-K")
-    if not result:
-        logger.warning("Ingest: no 10-K found for %s", ticker)
-        raise HTTPException(404, f"No 10-K filing found for '{ticker}'")
+    # 10-K cached, only supplementary types missing (10-Q / 8-K)
+    # → return 10-K immediately, fire background task (no polling needed)
+    if ten_k_record and all(ft != "10-K" for ft in missing):
+        task = ingest_company_filings.delay(ticker, missing)
+        logger.info("Ingest background (10-K cached): %s missing=%s task_id=%s", ticker, missing, task.id)
+        return {
+            "ticker": ticker,
+            "task_id": None,          # frontend won't poll — 10-K is ready
+            "status": "cached",
+            "filing_id":     ten_k_record["filing_id"],
+            "chunk_count":   ten_k_record["chunk_count"],
+            "already_existed": True,
+            "company_name":  (ten_k_filing or {}).get("company_name", ""),
+            "filed_date":    ten_k_record.get("filed_date", ""),
+        }
 
-    chunks = chunk_text(
-        text=result["text"],
-        chunk_size=1000,
-        chunk_overlap=200,
-        source_id=result["id"],
-    )
-    if not chunks:
-        logger.error("Ingest: chunking produced 0 chunks for %s", ticker)
-        raise HTTPException(422, "Filing text could not be chunked")
-
-    store_filing(result["id"], result, chunks)
-    rag_ingest(result["id"], chunks)
-
-    register_filing(redis, ticker, result["id"], {
-        "filed_date": result.get("filed_date", ""),
-        "chunk_count": len(chunks),
-    })
-
-    await get_or_extract_dashboard(redis, ticker, result["id"], chunks)
-
-    logger.info(
-        "Ingest complete: %s filing_id=%s chunks=%d filed=%s",
-        ticker, result["id"], len(chunks), result.get("filed_date", ""),
-    )
+    # 10-K itself is missing — queue task and return task_id for polling
+    task = ingest_company_filings.delay(ticker, missing)
+    logger.info("Ingest queued (10-K missing): %s missing=%s task_id=%s", ticker, missing, task.id)
     return {
         "ticker": ticker,
-        "filing_id": result["id"],
-        "chunk_count": len(chunks),
+        "task_id": task.id,
+        "status": "queued",
+        "filing_id":     None,
+        "chunk_count":   0,
         "already_existed": False,
-        "company_name": result.get("company_name", ""),
-        "filed_date": result.get("filed_date", ""),
+        "company_name":  "",
+        "filed_date":    "",
     }
 
 
-@router.post("/companies/{ticker}/ingest", response_model=IngestResponse)
-async def ingest_company(ticker: str, force: bool = False) -> IngestResponse:
-    """Fetch, chunk, embed and cache a company's 10-K. Idempotent. Use ?force=true to re-ingest."""
+@router.get("/companies/{ticker}/ingest/status")
+async def ingest_status(ticker: str, task_id: str):
+    """Poll Celery task status for an ongoing ingest."""
+    from celery_app import celery_app as _celery
+    ticker = ticker.upper()
+
     try:
-        data = await _run_ingest(ticker, force=force)
-    except HTTPException:
-        raise
+        result = _celery.AsyncResult(task_id)
+        state = result.state
+        meta = result.info or {}
     except Exception as e:
-        logger.error("Ingest failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Ingest failed: {e}")
-    return IngestResponse(**data)
+        logger.warning("Task status check failed: %s", e)
+        return {"ticker": ticker, "task_id": task_id, "status": "pending"}
+
+    if state == "SUCCESS":
+        return {"ticker": ticker, "task_id": task_id, "status": "done", "result": result.result}
+    if state == "FAILURE":
+        return {"ticker": ticker, "task_id": task_id, "status": "error", "error": str(meta)}
+    if state == "PROGRESS":
+        return {"ticker": ticker, "task_id": task_id, "status": "running", "step": meta.get("step", "")}
+
+    return {"ticker": ticker, "task_id": task_id, "status": state.lower()}
+
+
+@router.get("/companies/{ticker}/events")
+async def company_events(ticker: str):
+    """Return classified 8-K events for a ticker from Redis."""
+    import json as _json
+    ticker = ticker.upper()
+    redis = get_redis()
+    raw = redis.get(f"finsight:events:8-K:{ticker}")
+    events = _json.loads(raw) if raw else []
+    return {"ticker": ticker, "events": events}
 
 
 # ── Dashboard ────────────────────────────────────────────────────────
@@ -268,20 +296,19 @@ async def compare_companies(request: CompareRequest) -> CompareResponse:
     logger.info("Comparison request: %s vs %s", t1, t2)
     redis = get_redis()
 
-    try:
-        data1 = await _run_ingest(t1)
-        data2 = await _run_ingest(t2)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Ingest failed during comparison %s vs %s: %s", t1, t2, e, exc_info=True)
-        raise HTTPException(502, f"Ingest failed during comparison: {e}")
+    record1 = get_filing_record(redis, t1, "10-K")
+    record2 = get_filing_record(redis, t2, "10-K")
 
-    metrics1 = await get_or_extract_dashboard(redis, t1, data1["filing_id"])
-    metrics2 = await get_or_extract_dashboard(redis, t2, data2["filing_id"])
+    if not record1:
+        raise HTTPException(404, f"{t1} has not been ingested yet. Search for it first.")
+    if not record2:
+        raise HTTPException(404, f"{t2} has not been ingested yet. Search for it first.")
+
+    metrics1 = await get_or_extract_dashboard(redis, t1, record1["filing_id"])
+    metrics2 = await get_or_extract_dashboard(redis, t2, record2["filing_id"])
 
     result = await get_or_generate_comparison(
-        redis, t1, t2, data1["filing_id"], data2["filing_id"], metrics1, metrics2
+        redis, t1, t2, record1["filing_id"], record2["filing_id"], metrics1, metrics2
     )
 
     info1 = get_ticker_info(redis, t1)

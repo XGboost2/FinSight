@@ -9,7 +9,15 @@ const TABS = [
   { id: 'bullbear',     label: 'Bull vs Bear', icon: Scale,      sub: 'Debate'             },
 ]
 
-export default function AnalystSidebar({ activeTab, onTabChange }) {
+function StatusDot({ status }) {
+  if (!status) return null
+  if (status === 'loading') return <span className="tab-status-dot tab-status-loading" />
+  if (status === 'done')    return <span className="tab-status-dot tab-status-done" />
+  if (status === 'error')   return <span className="tab-status-dot tab-status-error" />
+  return null
+}
+
+export default function AnalystSidebar({ activeTab, onTabChange, tabStatus = {} }) {
   return (
     <nav className="analyst-sidebar">
       <div className="sidebar-label">Analysts</div>
@@ -24,6 +32,7 @@ export default function AnalystSidebar({ activeTab, onTabChange }) {
             <span className="sidebar-tab-label">{label}</span>
             <span className="sidebar-tab-sub">{sub}</span>
           </div>
+          <StatusDot status={tabStatus[id]} />
         </button>
       ))}
     </nav>

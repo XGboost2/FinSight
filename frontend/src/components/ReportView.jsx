@@ -113,7 +113,7 @@ function DiffSection({ section, loading, error }) {
 
 // ── Main Component ────────────────────────────────────────────────────
 
-export default function ReportView({ ticker, compact = false, ingesting = false }) {
+export default function ReportView({ ticker, compact = false, ingesting = false, onStatusChange }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState(null)
@@ -122,13 +122,16 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
     if (!ticker || ingesting) return
     setLoading(true)
     setError(null)
+    onStatusChange?.('loading')
     try {
       const { data } = await axios.get(
         `${API_URL}/api/companies/${ticker}/report${refresh ? '?refresh=true' : ''}`
       )
       setReport(data)
+      onStatusChange?.('done')
     } catch (e) {
       setError(e.response?.data?.detail || 'Failed to generate report.')
+      onStatusChange?.('error')
     } finally {
       setLoading(false)
     }

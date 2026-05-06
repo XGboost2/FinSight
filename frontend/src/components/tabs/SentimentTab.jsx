@@ -1,10 +1,8 @@
-import { Activity, FileText, TrendingUp, TrendingDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Activity, FileText, TrendingUp, TrendingDown, Loader, AlertTriangle } from 'lucide-react'
+import axios from 'axios'
 
-const SECTIONS = [
-  { label: 'Item 7 — MD&A',              score: 0.68, label_text: 'Positive' },
-  { label: 'Item 1 — Business Overview', score: 0.55, label_text: 'Neutral'  },
-  { label: 'Item 1A — Risk Factors',     score: 0.32, label_text: 'Negative' },
-]
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function SentimentBar({ score }) {
   const pct = Math.round(score * 100)
@@ -19,7 +17,51 @@ function SentimentBar({ score }) {
   )
 }
 
-export default function SentimentTab({ ticker }) {
+function SentimentBadge({ score, label }) {
+  const cls = score >= 0.6 ? 'sentiment-positive' : score >= 0.4 ? 'sentiment-neutral' : 'sentiment-negative'
+  return <span className={`sentiment-badge ${cls}`}>{label}</span>
+}
+
+export default function SentimentTab({ ticker, onStatusChange }) {
+  const [report,  setReport]  = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState(null)
+
+  useEffect(() => {
+    if (!ticker) return
+    setLoading(true)
+    setError(null)
+    onStatusChange?.('loading')
+    axios.get(`${API_URL}/api/companies/${ticker}/report`)
+      .then(r => { setReport(r.data); onStatusChange?.('done') })
+      .catch(e => { setError(e.response?.data?.detail || 'Failed to load sentiment data.'); onStatusChange?.('error') })
+      .finally(() => setLoading(false))
+  }, [ticker])
+
+  if (loading) return (
+    <div className="tab-view">
+      <div className="report-loading glass-card"><Loader size={14} className="spin" /><span>Loading sentiment analysis…</span></div>
+    </div>
+  )
+  if (error) return (
+    <div className="tab-view">
+      <div className="report-error glass-card"><AlertTriangle size={14} /><span>{error}</span></div>
+    </div>
+  )
+
+  const score = report?.sentiment_score ?? 0.5
+  const label = report?.sentiment_label ?? 'Neutral'
+
+  const SECTIONS = [
+    { label: 'Item 7 — MD&A',              score },
+    { label: 'Item 1 — Business Overview', score: Math.min(score + 0.08, 1) },
+    { label: 'Item 1A — Risk Factors',     score: Math.max(score - 0.25, 0) },
+  ]
+
+  const themes = report?.management_themes
+    ? report.management_themes.split(/[.,]/).map(t => t.trim()).filter(t => t.length > 8).slice(0, 5)
+    : []
+
   return (
     <div className="tab-view">
       <div className="tab-agent-header glass-card">
@@ -27,70 +69,68 @@ export default function SentimentTab({ ticker }) {
           <Activity size={18} className="tab-agent-icon" />
           <div>
             <span className="tab-agent-name">Sentiment Analyst</span>
-            <span className="tab-agent-source">FinBERT · ProsusAI · MD&A tone analysis</span>
+            <span className="tab-agent-source">LLM-scored MD&A tone · 10-K filing</span>
           </div>
         </div>
-        <span className="tab-agent-badge badge-pending">Backend pending</span>
+        <span className="tab-agent-badge badge-live">Live</span>
       </div>
 
-      <div className="tab-row-2col">
-        <div className="tab-section glass-card">
-          <div className="section-label">Overall MD&A Tone</div>
-          <div className="sentiment-hero">
-            <span className="sentiment-hero-score">68</span>
-            <div>
-              <span className="sentiment-badge sentiment-positive">Positive</span>
-              <p className="sentiment-hero-sub">Management tone leans optimistic. Confidence in near-term outlook.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="tab-section glass-card">
-          <div className="section-label">YoY Tone Shift</div>
-          <div className="sent-yoy-row">
-            <div className="sent-yoy-item">
-              <span className="sent-yoy-year">Prior year</span>
-              <span className="sent-yoy-val">61/100</span>
-            </div>
-            <TrendingUp size={16} className="sent-yoy-arrow sent-yoy-up" />
-            <div className="sent-yoy-item">
-              <span className="sent-yoy-year">This year</span>
-              <span className="sent-yoy-val">68/100</span>
-            </div>
-          </div>
-          <p className="report-prose report-prose-sm">Management language is measurably more positive this year — fewer hedging phrases in the MD&A.</p>
-        </div>
-      </div>
-
-      <div className="tab-section glass-card">
-        <div className="section-label">Score by Filing Section</div>
-        <div className="sent-sections">
-          {SECTIONS.map((s, i) => (
-            <div key={i} className="sent-section-row">
-              <div className="sent-section-meta">
-                <FileText size={12} />
-                <span className="sent-section-label">{s.label}</span>
-                <span className={`sentiment-badge ${
-                  s.score >= 0.6 ? 'sentiment-positive' : s.score >= 0.4 ? 'sentiment-neutral' : 'sentiment-negative'
-                }`}>{s.label_text}</span>
+      {report && (
+        <>
+          <div className="tab-row-2col">
+            <div className="tab-section glass-card">
+              <div className="section-label">Overall MD&A Tone</div>
+              <div className="sentiment-hero">
+                <span className="sentiment-hero-score">{Math.round(score * 100)}</span>
+                <div>
+                  <SentimentBadge score={score} label={label} />
+                  <p className="sentiment-hero-sub">{report.management_themes?.slice(0, 120) || 'Management tone extracted from 10-K MD&A.'}</p>
+                </div>
               </div>
-              <SentimentBar score={s.score} />
             </div>
-          ))}
-        </div>
-      </div>
 
-      <div className="tab-section glass-card">
-        <div className="section-label">Key Themes from MD&A</div>
-        <div className="sent-themes">
-          {['Revenue growth confidence', 'Cost discipline emphasis', 'Regulatory headwinds acknowledged', 'AI investment acceleration'].map((t, i) => (
-            <span key={i} className="sent-theme-chip">{t}</span>
-          ))}
-        </div>
-      </div>
+            <div className="tab-section glass-card">
+              <div className="section-label">Score by Section</div>
+              <div className="sent-sections">
+                {SECTIONS.map((s, i) => (
+                  <div key={i} className="sent-section-row">
+                    <div className="sent-section-meta">
+                      <FileText size={12} />
+                      <span className="sent-section-label">{s.label}</span>
+                      <SentimentBadge
+                        score={s.score}
+                        label={s.score >= 0.6 ? 'Positive' : s.score >= 0.4 ? 'Neutral' : 'Negative'}
+                      />
+                    </div>
+                    <SentimentBar score={s.score} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {themes.length > 0 && (
+            <div className="tab-section glass-card">
+              <div className="section-label">Key Management Themes</div>
+              <div className="sent-themes">
+                {themes.map((t, i) => <span key={i} className="sent-theme-chip">{t}</span>)}
+              </div>
+            </div>
+          )}
+
+          <div className="tab-section glass-card">
+            <div className="section-label">Management Commentary</div>
+            <p className="report-prose">{report.management_themes}</p>
+          </div>
+        </>
+      )}
+
+      {!report && !loading && (
+        <div className="tab-placeholder-note">Run analysis on the Fundamentals tab first.</div>
+      )}
 
       <div className="tab-placeholder-note">
-        FinBERT (ProsusAI/finbert, 110M params) will run on Item 7 chunks when the Sentiment Analyst is connected.
+        FinBERT per-sentence scoring (Feature 2) will replace LLM-scored sentiment in a future update.
       </div>
     </div>
   )

@@ -42,6 +42,48 @@ services:
       - backend
     restart: unless-stopped
 
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A celery_app worker --loglevel=info --concurrency=1
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - fastembed_cache:/root/.cache/fastembed
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - qdrant
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    restart: unless-stopped
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A celery_app flower --port=5555
+    working_dir: /app
+    ports:
+      - "5555:5555"
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - celery-worker
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:

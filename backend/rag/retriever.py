@@ -19,6 +19,7 @@ from qdrant_client.models import (
     Filter,
     Fusion,
     FusionQuery,
+    MatchAny,
     MatchValue,
     Modifier,
     PointStruct,
@@ -136,6 +137,52 @@ def search(
             "text": hit.payload["text"],
             "item": hit.payload.get("item", ""),
             "section": hit.payload.get("section", ""),
+            "filing_id": hit.payload.get("filing_id", ""),
+            "score": round(hit.score, 4),
+        }
+        for hit in result.points
+    ]
+
+
+def search_multi(
+    query_vector: list[float],
+    query_sparse: tuple[list[int], list[float]],
+    filing_ids: list[str],
+    top_k: int = 5,
+) -> list[dict]:
+    """Hybrid search across multiple filing IDs (e.g. 10-K + 10-Q together)."""
+    client = _client()
+    filing_filter = Filter(
+        must=[FieldCondition(key="filing_id", match=MatchAny(any=filing_ids))]
+    )
+    sp_indices, sp_values = query_sparse
+    result = client.query_points(
+        collection_name=COLLECTION,
+        prefetch=[
+            Prefetch(
+                query=SparseVector(indices=sp_indices, values=sp_values),
+                using="text-sparse",
+                filter=filing_filter,
+                limit=top_k * 4,
+            ),
+            Prefetch(
+                query=query_vector,
+                using="text-dense",
+                filter=filing_filter,
+                limit=top_k * 4,
+            ),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),
+        limit=top_k,
+        with_payload=True,
+    )
+    return [
+        {
+            "chunk_index": hit.payload["chunk_index"],
+            "text": hit.payload["text"],
+            "item": hit.payload.get("item", ""),
+            "section": hit.payload.get("section", ""),
+            "filing_id": hit.payload.get("filing_id", ""),
             "score": round(hit.score, 4),
         }
         for hit in result.points
