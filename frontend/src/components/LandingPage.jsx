@@ -24,7 +24,7 @@ export default function LandingPage({ onSelect, theme, onToggleTheme }) {
         </div>
 
         <h1 className="landing-heading">What equity would you like to analyze?</h1>
-        <p className="landing-sub">SEC 10-K, 10-Q and 8-K filings · YoY risk analysis · AI-powered insights</p>
+        <p className="landing-sub">SEC EDGAR filings · YoY risk analysis · AI-powered insights</p>
 
         <div className="landing-search-wrap">
           <CompanySearch
