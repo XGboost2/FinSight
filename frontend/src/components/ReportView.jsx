@@ -2,17 +2,10 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import {
   FileBarChart, Loader, RefreshCw, TrendingUp, TrendingDown,
-  AlertTriangle, CheckCircle, Plus, Minus, ArrowRight
+  AlertTriangle, CheckCircle,
 } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-const TABS = [
-  { id: 'analysis',  label: 'Analysis'        },
-  { id: 'risk',      label: 'Risk Changes'     },
-  { id: 'mda',       label: 'MD&A Changes'     },
-  { id: 'business',  label: 'Business Changes' },
-]
 
 const SIGNAL_CONFIG = {
   positive: { cls: 'signal-positive', icon: '✅', label: 'Positive' },
@@ -26,24 +19,6 @@ function SignalBadge({ signal }) {
   return <span className={`signal-badge ${cfg.cls}`}>{cfg.icon} {cfg.label}</span>
 }
 
-function RiskGauge({ score }) {
-  const pct = Math.round(score * 100)
-  const label = score < 0.3 ? 'Low' : score < 0.6 ? 'Moderate' : 'High'
-  const cls   = score < 0.3 ? 'gauge-low' : score < 0.6 ? 'gauge-moderate' : 'gauge-high'
-  return (
-    <div className="risk-gauge">
-      <div className="gauge-track">
-        <div className={`gauge-fill ${cls}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className={`gauge-label ${cls}`}>{label} · {pct}/100</span>
-    </div>
-  )
-}
-
-function SentimentBadge({ score, label }) {
-  const cls = score >= 0.6 ? 'sentiment-positive' : score >= 0.4 ? 'sentiment-neutral' : 'sentiment-negative'
-  return <span className={`sentiment-badge ${cls}`}>{label}</span>
-}
 
 // ── Diff Tab ──────────────────────────────────────────────────────────
 
@@ -139,15 +114,9 @@ function DiffSection({ section, loading, error }) {
 // ── Main Component ────────────────────────────────────────────────────
 
 export default function ReportView({ ticker, compact = false, ingesting = false }) {
-  const [activeTab, setActiveTab] = useState('analysis')
-  const [report, setReport]       = useState(null)
-  const [loading, setLoading]     = useState(false)
-  const [error, setError]         = useState(null)
-
-  const [diff, setDiff]           = useState(null)
-  const [diffLoading, setDiffLoading] = useState(false)
-  const [diffError, setDiffError] = useState(null)
-  const [diffFetched, setDiffFetched] = useState(false)
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError]   = useState(null)
 
   const fetchReport = async (refresh = false) => {
     if (!ticker || ingesting) return
@@ -165,36 +134,7 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
     }
   }
 
-  const fetchDiff = async () => {
-    if (!ticker || diffFetched) return
-    setDiffLoading(true)
-    setDiffError(null)
-    try {
-      const { data } = await axios.get(`${API_URL}/api/companies/${ticker}/diff`)
-      setDiff(data)
-      setDiffFetched(true)
-    } catch (e) {
-      setDiffError(e.response?.data?.detail || 'Could not compute year-over-year diff.')
-      setDiffFetched(true)
-    } finally {
-      setDiffLoading(false)
-    }
-  }
-
-  // Reset on ticker change
-  useEffect(() => {
-    setActiveTab('analysis')
-    setDiff(null)
-    setDiffFetched(false)
-    setDiffError(null)
-  }, [ticker])
-
   useEffect(() => { fetchReport() }, [ticker, ingesting])
-
-  // Fetch diff lazily when a diff tab is first clicked
-  useEffect(() => {
-    if (activeTab !== 'analysis' && !diffFetched) fetchDiff()
-  }, [activeTab])
 
   if (!ticker) return null
 
@@ -220,11 +160,6 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
     </div>
   )
 
-  const diffSection = {
-    risk:     diff?.item_1a,
-    mda:      diff?.item_7,
-    business: diff?.item_1,
-  }
 
   return (
     <div className={`report-view ${compact ? 'report-compact' : ''}`}>
@@ -253,24 +188,9 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
         </div>
       )}
 
-      {/* Tabs — only in full view */}
-      {!compact && (
-        <div className="report-tabs">
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              className={`report-tab ${activeTab === tab.id ? 'report-tab-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Analysis content */}
+      <>
 
-      {/* Tab content */}
-      {activeTab === 'analysis' && (
-        <>
           {report.company_overview && (
             <div className="report-section glass-card">
               <div className="section-label">Company Overview</div>
@@ -316,66 +236,7 @@ export default function ReportView({ ticker, compact = false, ingesting = false 
               <p className="report-prose">{report.trend_narrative}</p>
             </div>
           )}
-
-          <div className="report-row-2col">
-            <div className="report-section glass-card">
-              <div className="section-label">
-                <AlertTriangle size={12} /> Risk Assessment
-              </div>
-              <RiskGauge score={report.risk_score ?? 0} />
-              {report.risk_factors?.length > 0 && (
-                <ul className="risk-list-report">
-                  {report.risk_factors.map((r, i) => (
-                    <li key={i} className="risk-item-report">{r}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="report-section glass-card">
-              <div className="section-label">Management Sentiment</div>
-              <div className="sentiment-row">
-                <SentimentBadge score={report.sentiment_score ?? 0.5} label={report.sentiment_label ?? 'Neutral'} />
-                <span className="sentiment-score">{Math.round((report.sentiment_score ?? 0.5) * 100)}/100</span>
-              </div>
-              {report.management_themes && (
-                <p className="report-prose report-prose-sm">{report.management_themes}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="bull-bear-grid">
-            <div className="bull-card glass-card">
-              <div className="section-label bull-label">
-                <TrendingUp size={12} /> Bull Case
-              </div>
-              <ul className="case-list">
-                {(report.bull_case ?? []).map((pt, i) => (
-                  <li key={i} className="case-item case-item-bull">+ {pt}</li>
-                ))}
-              </ul>
-            </div>
-            <div className="bear-card glass-card">
-              <div className="section-label bear-label">
-                <TrendingDown size={12} /> Bear Case
-              </div>
-              <ul className="case-list">
-                {(report.bear_case ?? []).map((pt, i) => (
-                  <li key={i} className="case-item case-item-bear">− {pt}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </>
-      )}
-
-      {activeTab !== 'analysis' && (
-        <DiffSection
-          section={diffSection[activeTab]}
-          loading={diffLoading}
-          error={diffError}
-        />
-      )}
+      </>
 
       {/* Verdict — always visible */}
       {report.verdict && (() => {
