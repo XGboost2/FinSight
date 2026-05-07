@@ -38,7 +38,7 @@ export default function LandingPage({ onSelect, theme, onToggleTheme }) {
       </div>
 
       <footer className="landing-footer">
-        <span>Powered by Anthropic Claude · SEC EDGAR · Qdrant</span>
+        <span>AI-powered · SEC EDGAR filings · FinBERT sentiment · Real-time RAG</span>
       </footer>
     </div>
   )
