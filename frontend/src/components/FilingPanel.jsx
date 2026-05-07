@@ -12,8 +12,8 @@ const SAMPLE_QUESTIONS = [
 
 const MODELS = [
   { value: 'auto',               label: 'Auto',             group: 'DeepSeek' },
-  { value: 'deepseek-chat',      label: 'DS Chat',          group: 'DeepSeek' },
-  { value: 'deepseek-reasoner',  label: 'DS Reasoner',      group: 'DeepSeek' },
+  { value: 'deepseek-v4-flash',  label: 'DS Flash',         group: 'DeepSeek' },
+  { value: 'deepseek-v4-pro',    label: 'DS Pro',           group: 'DeepSeek' },
   { value: 'claude-haiku-4-5',   label: 'Haiku',            group: 'Anthropic' },
   { value: 'claude-sonnet-4-6',  label: 'Sonnet',           group: 'Anthropic' },
   { value: 'claude-opus-4-7',    label: 'Opus',             group: 'Anthropic' },

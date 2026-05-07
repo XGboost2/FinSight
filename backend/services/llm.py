@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # Cost per 1M tokens (USD) — update as pricing changes
 _PRICING: dict[str, dict[str, float]] = {
-    "deepseek-chat":     {"input": 0.07,  "output": 0.28},
-    "deepseek-reasoner": {"input": 0.55,  "output": 2.19},
+    "deepseek-v4-flash": {"input": 0.14,   "output": 0.28},   # cache miss $0.14; cache hit $0.0028
+    "deepseek-v4-pro":   {"input": 0.435,  "output": 0.87},   # 75% discount active until 2026-05-31; full price: $1.74/$3.48
     "claude-haiku-4-5":  {"input": 0.80,  "output": 4.00},
     "claude-sonnet-4-6": {"input": 3.00,  "output": 15.00},
     "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
@@ -52,8 +52,8 @@ def _calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return round(cost, 6)
 
 
-CHEAP_MODEL = "deepseek-chat"
-POWER_MODEL = "deepseek-reasoner"
+CHEAP_MODEL = "deepseek-v4-flash"
+POWER_MODEL = "deepseek-v4-pro"
 
 # Signals that a question needs multi-step reasoning
 _POWER_KEYWORDS = {
@@ -64,7 +64,7 @@ _POWER_KEYWORDS = {
 
 
 def _route_model(query: str) -> str:
-    """Use deepseek-reasoner for complex multi-step questions, deepseek-chat for simple lookups."""
+    """Use deepseek-v4-pro for complex multi-step questions, deepseek-v4-flash for simple lookups."""
     q = query.lower()
     if any(kw in q for kw in _POWER_KEYWORDS) or len(query) > 200:
         return POWER_MODEL
