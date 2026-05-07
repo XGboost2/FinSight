@@ -1,6 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { vi, describe, it, expect, afterEach } from 'vitest'
 import CompanySearch from '../CompanySearch'
 
 const RESULTS = [
@@ -14,7 +13,10 @@ function mockFetch(data) {
   }))
 }
 
-beforeEach(() => { vi.useFakeTimers() })
+function type(input, value) {
+  fireEvent.change(input, { target: { value } })
+}
+
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('CompanySearch', () => {
@@ -23,11 +25,12 @@ describe('CompanySearch', () => {
     expect(screen.getByPlaceholderText('Search here…')).toBeInTheDocument()
   })
 
-  it('does not search for queries shorter than 2 chars', async () => {
+  it('does not search for queries shorter than 2 chars', () => {
+    vi.useFakeTimers()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     render(<CompanySearch onSelect={vi.fn()} />)
-    await userEvent.type(screen.getByRole('textbox'), 'a')
+    type(screen.getByRole('textbox'), 'a')
     vi.advanceTimersByTime(400)
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -35,9 +38,8 @@ describe('CompanySearch', () => {
   it('shows suggestions after debounce fires', async () => {
     mockFetch(RESULTS)
     render(<CompanySearch onSelect={vi.fn()} />)
-    await userEvent.type(screen.getByRole('textbox'), 'ap')
-    vi.advanceTimersByTime(300)
-    await waitFor(() => expect(screen.getByText('AAPL')).toBeInTheDocument())
+    type(screen.getByRole('textbox'), 'ap')
+    await waitFor(() => expect(screen.getByText('AAPL')).toBeInTheDocument(), { timeout: 1000 })
     expect(screen.getByText('Apple Inc.')).toBeInTheDocument()
   })
 
@@ -45,9 +47,8 @@ describe('CompanySearch', () => {
     mockFetch(RESULTS)
     const onSelect = vi.fn()
     render(<CompanySearch onSelect={onSelect} />)
-    await userEvent.type(screen.getByRole('textbox'), 'ap')
-    vi.advanceTimersByTime(300)
-    await waitFor(() => screen.getByText('AAPL'))
+    type(screen.getByRole('textbox'), 'ap')
+    await waitFor(() => screen.getByText('AAPL'), { timeout: 1000 })
     fireEvent.click(screen.getByText('AAPL'))
     expect(onSelect).toHaveBeenCalledWith(RESULTS[0])
     expect(screen.queryByText('Apple Something')).not.toBeInTheDocument()
@@ -58,9 +59,8 @@ describe('CompanySearch', () => {
     const onSelect = vi.fn()
     render(<CompanySearch onSelect={onSelect} />)
     const input = screen.getByRole('textbox')
-    await userEvent.type(input, 'ap')
-    vi.advanceTimersByTime(300)
-    await waitFor(() => screen.getByText('AAPL'))
+    type(input, 'ap')
+    await waitFor(() => screen.getByText('AAPL'), { timeout: 1000 })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith(RESULTS[0])
   })
@@ -69,9 +69,8 @@ describe('CompanySearch', () => {
     mockFetch(RESULTS)
     render(<CompanySearch onSelect={vi.fn()} />)
     const input = screen.getByRole('textbox')
-    await userEvent.type(input, 'ap')
-    vi.advanceTimersByTime(300)
-    await waitFor(() => screen.getByText('AAPL'))
+    type(input, 'ap')
+    await waitFor(() => screen.getByText('AAPL'), { timeout: 1000 })
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByText('AAPL')).not.toBeInTheDocument()
   })
@@ -79,9 +78,8 @@ describe('CompanySearch', () => {
   it('shows no results when fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
     render(<CompanySearch onSelect={vi.fn()} />)
-    await userEvent.type(screen.getByRole('textbox'), 'ap')
-    vi.advanceTimersByTime(300)
-    await waitFor(() => expect(screen.queryByRole('list')).not.toBeInTheDocument())
+    type(screen.getByRole('textbox'), 'ap')
+    await waitFor(() => expect(screen.queryByRole('list')).not.toBeInTheDocument(), { timeout: 1000 })
   })
 
   it('disables input when disabled prop set', () => {

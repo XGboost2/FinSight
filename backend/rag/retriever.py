@@ -187,3 +187,31 @@ def search_multi(
         }
         for hit in result.points
     ]
+
+
+def get_section_chunks(filing_id: str, item: str, limit: int = 40) -> list[dict]:
+    """Fetch all stored chunks for a specific section of a filing (no vector search)."""
+    client = _client()
+    points, _ = client.scroll(
+        collection_name=COLLECTION,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(key="filing_id", match=MatchValue(value=filing_id)),
+                FieldCondition(key="item", match=MatchValue(value=item)),
+            ]
+        ),
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return sorted(
+        [
+            {
+                "chunk_index": p.payload["chunk_index"],
+                "text": p.payload["text"],
+                "item": p.payload.get("item", ""),
+            }
+            for p in points
+        ],
+        key=lambda c: c["chunk_index"],
+    )

@@ -29,7 +29,7 @@ describe('Dashboard', () => {
 
   it('shows loading indicator while fetching', () => {
     render(<Dashboard company={COMPANY} dashboard={null} loading error={null} />)
-    expect(screen.getByText(/analysing 10-k/i)).toBeInTheDocument()
+    expect(screen.getByText(/fetching filings/i)).toBeInTheDocument()
   })
 
   it('shows error message', () => {

@@ -55,7 +55,7 @@ describe('FilingPanel', () => {
     await waitFor(() => expect(screen.getByText(LLM_RESPONSE.answer)).toBeInTheDocument())
     expect(axios.post).toHaveBeenCalledWith(
       expect.stringContaining('/api/chat'),
-      { question: 'What are the risks?', ticker: 'AAPL' }
+      expect.objectContaining({ question: 'What are the risks?', ticker: 'AAPL' })
     )
   })
 

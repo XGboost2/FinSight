@@ -68,24 +68,35 @@ def _extract_readable_summary(text: str, event_type: str) -> str:
     """Extract first readable sentence from 8-K text, skipping XBRL header junk."""
     import re
 
-    # Split into lines, find first that looks like a real sentence
-    # Real sentences: >= 40 chars, mostly alphabetic, no XBRL patterns
     xbrl_patterns = re.compile(r'(0{6,}|aapl:|us-gaap:|true|false|NASDAQ)', re.I)
+    # SEC form field labels — these are headers/labels, not prose
+    form_header = re.compile(
+        r'^(item\s+\d|date of|registrant|commission|pursuant|incorporated|exchange act'
+        r'|securities act|check the|indicate by|yes\s*[\[|]|no\s*[\[|]|former name'
+        r'|address|telephone|zip code|state or other|exact name|filed as)',
+        re.I,
+    )
 
     for line in text.split('\n'):
         line = line.strip()
-        if len(line) < 40:
+        if len(line) < 50:
+            continue
+        # Form field labels always end with colon
+        if line.endswith(':'):
+            continue
+        if form_header.search(line):
             continue
         alpha_ratio = sum(c.isalpha() or c.isspace() for c in line) / len(line)
-        if alpha_ratio < 0.6:
+        if alpha_ratio < 0.65:
             continue
         if xbrl_patterns.search(line):
             continue
-        # Looks readable — clean and return
+        # Must read like prose — requires at least one sentence-ending punctuation
+        if not re.search(r'[.!?]', line):
+            continue
         clean = re.sub(r'\s+', ' ', line).strip()
         return clean[:250]
 
-    # Fallback: generic description based on event type
     fallbacks = {
         "earnings":    "Quarterly earnings results and financial performance disclosed.",
         "leadership":  "Executive leadership or board of directors change disclosed.",

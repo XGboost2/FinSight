@@ -36,6 +36,7 @@ from models.schemas import (
     IngestResponse,
     SearchResponse,
     SectionDiff,
+    SentimentResult,
     SourceChunk,
     YoYDiffResponse,
 )
@@ -44,6 +45,7 @@ from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
 from services.report import get_or_generate_report
+from services.sentiment import get_or_score_sentiment
 from ingestion.xbrl import get_revenue_trend
 from services.llm import ask_llm
 from services.store import (
@@ -281,6 +283,33 @@ async def get_yoy_diff(ticker: str, refresh: bool = False) -> YoYDiffResponse:
         item_1a=_to_section(result.get("item_1a")),
         item_7=_to_section(result.get("item_7")),
     )
+
+
+# ── FinBERT Sentiment ────────────────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/sentiment", response_model=SentimentResult)
+async def get_sentiment(ticker: str, refresh: bool = False) -> SentimentResult:
+    """FinBERT sentiment scoring on MD&A (Item 7). 30-day Redis cache.
+    Use ?refresh=true to force rescore.
+    """
+    ticker = ticker.upper()
+    logger.info("Sentiment request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+
+    if not is_ingested(redis, ticker):
+        raise HTTPException(404, f"No filing for '{ticker}'. Call /ingest first.")
+
+    record = get_filing_record(redis, ticker)
+
+    try:
+        result = await get_or_score_sentiment(redis, ticker, record["filing_id"], refresh=refresh)
+    except Exception as e:
+        logger.error("Sentiment failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"Sentiment scoring failed: {e}")
+
+    logger.info("Sentiment served: %s score=%.3f", ticker, result.get("score", 0))
+    return SentimentResult(**result)
 
 
 # ── Comparison Engine ────────────────────────────────────────────────

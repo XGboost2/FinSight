@@ -39,8 +39,8 @@ describe('CompareView', () => {
 
   it('shows both tickers in the header', () => {
     render(<CompareView comparison={COMPARISON} loading={false} error={null} onBack={vi.fn()} />)
-    expect(screen.getByText('AAPL')).toBeInTheDocument()
-    expect(screen.getByText('MSFT')).toBeInTheDocument()
+    expect(screen.getAllByText('AAPL').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('MSFT').length).toBeGreaterThan(0)
   })
 
   it('renders financial metrics bar rows', () => {

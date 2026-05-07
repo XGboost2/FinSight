@@ -206,6 +206,35 @@ class YoYDiffResponse(BaseModel):
     item_7:  SectionDiff = SectionDiff()
 
 
+# === FinBERT Sentiment (Feature 2) ===
+
+class SentimentSentence(BaseModel):
+    text: str
+    label: str   # positive | negative | neutral
+    score: float
+
+
+class SentimentResult(BaseModel):
+    ticker: str
+    filing_id: str
+    score: float = 0.5          # 0.0 → 1.0 (rescaled from pos - neg)
+    label: str = "Neutral"      # Positive | Neutral | Negative
+    avg_positive: float = 0.0
+    avg_negative: float = 0.0
+    avg_neutral: float = 0.0
+    chunk_count: int = 0
+    top_sentences: list[SentimentSentence] = []
+    model: str = "ProsusAI/finbert"
+    source: str = "Item 7 — MD&A"
+
+    @field_validator("top_sentences", mode="before")
+    @classmethod
+    def coerce_sentences(cls, v):
+        if not v:
+            return []
+        return [SentimentSentence(**s) if isinstance(s, dict) else s for s in v]
+
+
 # === Health ===
 
 class HealthResponse(BaseModel):
