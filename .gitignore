@@ -67,6 +67,5 @@ backend/logs/
 *.swo
 finsight/
 frontend/.env
-FEATURES.md
-INTERVIEW_PREP.md
-LEARNINGS.md
+*.md
+!README.md
