@@ -206,6 +206,33 @@ class YoYDiffResponse(BaseModel):
     item_7:  SectionDiff = SectionDiff()
 
 
+# === News (Feature 3a) ===
+
+class NewsItem(BaseModel):
+    headline:     str
+    summary:      str = ""
+    url:          str = ""
+    source:       str = ""
+    published_at: str = ""
+    sentiment:    str = "neutral"   # positive | negative | neutral (FinBERT)
+    image:        str = ""
+
+
+class NewsResponse(BaseModel):
+    ticker:           str
+    items:            list[NewsItem] = []
+    sentiment_counts: dict = {}
+    summary:          str = ""
+    source:           str = "finnhub"
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def coerce_items(cls, v):
+        if not v:
+            return []
+        return [NewsItem(**i) if isinstance(i, dict) else i for i in v]
+
+
 # === FinBERT Sentiment (Feature 2) ===
 
 class SentimentSentence(BaseModel):

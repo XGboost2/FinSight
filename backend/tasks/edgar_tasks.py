@@ -65,6 +65,16 @@ def ingest_company_filings(self, ticker: str, filing_types: list[str] | None = N
             logger.warning("Report pre-generation failed: %s", e)
             result.setdefault("errors", []).append(f"Report: {e}")
 
+        # Pre-fetch news so first News tab load is instant
+        self.update_state(state="PROGRESS", meta={"ticker": ticker, "step": "Fetching latest news…"})
+        try:
+            from ingestion.news import get_or_fetch_news
+            asyncio.run(get_or_fetch_news(redis, ticker, refresh=False))
+            logger.info("News pre-cached for %s", ticker)
+        except Exception as e:
+            logger.warning("News pre-cache failed: %s", e)
+            result.setdefault("errors", []).append(f"News: {e}")
+
         logger.info("Celery task complete: %s → %s", ticker, result)
         return result
 

@@ -19,3 +19,8 @@ apscheduler>=3.10.0
 # Agents + Task Queue
 celery>=5.3.0
 flower>=2.0.0
+
+# FinBERT — used for news sentiment scoring during ingest
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+transformers>=4.40.0

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
     
+    # --- News ---
+    FINNHUB_API_KEY: str = ""
+
     # --- Cache (Day 49+) ---
     REDIS_URL: str = "redis://localhost:6379"
 

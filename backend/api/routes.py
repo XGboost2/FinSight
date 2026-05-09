@@ -21,6 +21,8 @@ from ingestion.chunker import chunk_text
 from ingestion.edgar import fetch_and_extract
 from models.schemas import (
     AnalysisReport,
+    NewsItem,
+    NewsResponse,
     ChatRequest,
     ChatResponse,
     CompanyInfo,
@@ -44,6 +46,7 @@ from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
+from ingestion.news import get_or_fetch_news
 from services.report import get_or_generate_report
 from services.sentiment import get_or_score_sentiment
 from ingestion.xbrl import get_revenue_trend
@@ -283,6 +286,26 @@ async def get_yoy_diff(ticker: str, refresh: bool = False) -> YoYDiffResponse:
         item_1a=_to_section(result.get("item_1a")),
         item_7=_to_section(result.get("item_7")),
     )
+
+
+# ── News ─────────────────────────────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/news", response_model=NewsResponse)
+async def get_news(ticker: str, refresh: bool = False) -> NewsResponse:
+    """Fetch recent company news via Finnhub, scored with FinBERT. 1hr Redis cache."""
+    ticker = ticker.upper()
+    logger.info("News request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+
+    try:
+        result = await get_or_fetch_news(redis, ticker, refresh=refresh)
+    except Exception as e:
+        logger.error("News fetch failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"News fetch failed: {e}")
+
+    logger.info("News served: %s — %d items", ticker, len(result.get("items", [])))
+    return NewsResponse(**result)
 
 
 # ── FinBERT Sentiment ────────────────────────────────────────────────

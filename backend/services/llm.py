@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # Cost per 1M tokens (USD) — update as pricing changes
 _PRICING: dict[str, dict[str, float]] = {
-    "deepseek-v4-flash": {"input": 0.14,   "output": 0.28},   # cache miss $0.14; cache hit $0.0028
-    "deepseek-v4-pro":   {"input": 0.435,  "output": 0.87},   # 75% discount active until 2026-05-31; full price: $1.74/$3.48
+    "deepseek-v4-flash": {"input": 0.14,   "output": 0.28},   # cache miss; cache hit $0.0028
+    "deepseek-v4-pro":   {"input": 0.435,  "output": 0.87},   # 75% discount until 2026-05-31; full price: $1.74/$3.48
     "claude-haiku-4-5":  {"input": 0.80,  "output": 4.00},
     "claude-sonnet-4-6": {"input": 3.00,  "output": 15.00},
     "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
@@ -52,8 +52,8 @@ def _calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return round(cost, 6)
 
 
-CHEAP_MODEL = "deepseek-v4-flash"
-POWER_MODEL = "deepseek-v4-pro"
+CHEAP_MODEL = "deepseek-v4-flash"  # thinking disabled via API param for non-reasoning calls
+POWER_MODEL = "deepseek-v4-pro"   # thinking model
 
 # Signals that a question needs multi-step reasoning
 _POWER_KEYWORDS = {
@@ -154,14 +154,23 @@ async def call_llm_raw(
     text, tok_in, tok_out, m = "", 0, 0, model or CHEAP_MODEL
 
     if (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
-        from openai import AsyncOpenAI
+        import httpx as _httpx
         m = model or CHEAP_MODEL
-        client = AsyncOpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL)
-        resp = await client.chat.completions.create(
-            model=m, max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text, tok_in, tok_out = resp.choices[0].message.content or "", resp.usage.prompt_tokens, resp.usage.completion_tokens
+        # deepseek-v4-flash defaults to thinking mode — disable it for non-reasoning calls
+        extra = {"thinking": {"type": "disabled"}} if m == "deepseek-v4-flash" else {}
+        async with _httpx.AsyncClient(timeout=60) as _hc:
+            _r = await _hc.post(
+                f"{settings.DEEPSEEK_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}"},
+                json={"model": m, "max_tokens": max_tokens,
+                      "messages": [{"role": "user", "content": prompt}], **extra},
+            )
+            _r.raise_for_status()
+            _data = _r.json()
+        _msg = _data["choices"][0]["message"]
+        text = _msg.get("content") or _msg.get("reasoning_content") or ""
+        tok_in  = _data["usage"]["prompt_tokens"]
+        tok_out = _data["usage"]["completion_tokens"]
 
     elif (not model or provider == "anthropic") and settings.ANTHROPIC_API_KEY:
         import anthropic
