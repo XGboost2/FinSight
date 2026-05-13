@@ -36,11 +36,19 @@ def get_model() -> TextEmbedding:
     return _model
 
 
+_EMBED_BATCH = 32
+
+
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    """Embed filing chunks at ingest time."""
+    """Embed filing chunks at ingest time, batched to avoid ONNX memory spikes."""
     if not texts:
         return []
-    return [vec.tolist() for vec in get_model().embed(texts)]
+    model = get_model()
+    results: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_BATCH):
+        batch = texts[i : i + _EMBED_BATCH]
+        results.extend(vec.tolist() for vec in model.embed(batch))
+    return results
 
 
 def embed_query(question: str) -> list[float]:

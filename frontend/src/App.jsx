@@ -59,6 +59,8 @@ export default function App() {
   const [primaryStep, setPrimaryStep] = useState('')
   const [primaryError, setPrimaryError] = useState(null)
 
+  const [mountedTabs, setMountedTabs] = useState(new Set())
+
   const [compareMode, setCompareMode] = useState(false)
   const [compareCompany, setCompareCompany] = useState(null)
   const [comparison, setComparison] = useState(null)
@@ -71,6 +73,13 @@ export default function App() {
 
   const updateTabStatus = (tab, status) =>
     setTabStatus(prev => ({ ...prev, [tab]: status }))
+
+  const handleTabChange = (tab) => {
+    setActiveAnalyst(tab)
+    if (tab !== 'fundamentals') {
+      setMountedTabs(prev => new Set([...prev, tab]))
+    }
+  }
 
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('finsight-theme')
@@ -122,6 +131,7 @@ export default function App() {
     setCompareMode(false)
     setActiveAnalyst('fundamentals')
     setTabStatus({})
+    setMountedTabs(new Set())
 
     try {
       const { ingest, dashboard } = await ingestAndDashboard(
@@ -130,6 +140,7 @@ export default function App() {
       )
       setPrimaryFiling(ingest)
       setPrimaryDash(dashboard)
+      setMountedTabs(new Set(['news', 'sentiment', 'risk', 'technical', 'bullbear']))
     } catch (e) {
       setPrimaryError(e.response?.data?.detail || e.message || 'Failed to load filing.')
     } finally {
@@ -239,7 +250,7 @@ export default function App() {
           />
         ) : (
           <div className="workspace">
-            <AnalystSidebar activeTab={activeAnalyst} onTabChange={setActiveAnalyst} tabStatus={tabStatus} />
+            <AnalystSidebar activeTab={activeAnalyst} onTabChange={handleTabChange} tabStatus={tabStatus} />
 
             <PanelGroup direction="horizontal" className="panel-group">
               <Panel defaultSize={62} minSize={35} className="panel">
@@ -260,11 +271,31 @@ export default function App() {
                       />
                     </>
                   )}
-                  {activeAnalyst === 'news'      && <NewsTab      ticker={primary.ticker} onStatusChange={s => updateTabStatus('news', s)} />}
-                  {activeAnalyst === 'sentiment' && <SentimentTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('sentiment', s)} />}
-                  {activeAnalyst === 'risk'      && <RiskTab      ticker={primary.ticker} onStatusChange={s => updateTabStatus('risk', s)} />}
-                  {activeAnalyst === 'technical' && <TechnicalTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('technical', s)} />}
-                  {activeAnalyst === 'bullbear'  && <BullBearTab  ticker={primary.ticker} onStatusChange={s => updateTabStatus('bullbear', s)} />}
+                  {mountedTabs.has('news') && (
+                    <div style={{ display: activeAnalyst === 'news' ? 'contents' : 'none' }}>
+                      <NewsTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('news', s)} />
+                    </div>
+                  )}
+                  {mountedTabs.has('sentiment') && (
+                    <div style={{ display: activeAnalyst === 'sentiment' ? 'contents' : 'none' }}>
+                      <SentimentTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('sentiment', s)} />
+                    </div>
+                  )}
+                  {mountedTabs.has('risk') && (
+                    <div style={{ display: activeAnalyst === 'risk' ? 'contents' : 'none' }}>
+                      <RiskTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('risk', s)} />
+                    </div>
+                  )}
+                  {mountedTabs.has('technical') && (
+                    <div style={{ display: activeAnalyst === 'technical' ? 'contents' : 'none' }}>
+                      <TechnicalTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('technical', s)} />
+                    </div>
+                  )}
+                  {mountedTabs.has('bullbear') && (
+                    <div style={{ display: activeAnalyst === 'bullbear' ? 'contents' : 'none' }}>
+                      <BullBearTab ticker={primary.ticker} onStatusChange={s => updateTabStatus('bullbear', s)} />
+                    </div>
+                  )}
                 </div>
               </Panel>
 

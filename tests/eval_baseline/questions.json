@@ -4,6 +4,7 @@
     "ticker": "AAPL",
     "question": "What are Apple's top three risk factors?",
     "expected_topics": ["supply chain", "competition", "regulation"],
+    "ground_truth": "Apple's top risk factors include: (1) adverse macroeconomic conditions such as inflation, slower growth, and geopolitical tensions that reduce consumer demand; (2) global supply chain disruptions caused by reliance on single-source suppliers and concentration of manufacturing in Asia, particularly China; and (3) intense competition across all product and service categories from well-resourced companies including Samsung, Google, and Microsoft.",
     "notes": "Should cite specific risks, not generic ones"
   },
   {
@@ -11,6 +12,7 @@
     "ticker": "AAPL",
     "question": "What was Apple's total net revenue for the most recent fiscal year?",
     "expected_topics": ["revenue", "fiscal year", "billion"],
+    "ground_truth": "Apple's total net sales for fiscal year 2025 were $416,161 million (approximately $416.2 billion), an increase from $391,035 million in fiscal year 2024.",
     "notes": "Must contain a specific dollar figure"
   },
   {
@@ -18,6 +20,7 @@
     "ticker": "AAPL",
     "question": "How does Apple describe its competitive position in the smartphone market?",
     "expected_topics": ["competition", "iPhone", "market"],
+    "ground_truth": "Apple competes in highly competitive markets characterised by rapid technological change, aggressive pricing, and frequent new product introductions. The iPhone competes primarily with smartphones running Google's Android operating system made by Samsung, Huawei, Xiaomi, and others. Apple's competitive advantage rests on its integrated hardware-software ecosystem, brand loyalty, and premium positioning.",
     "notes": "Should reference direct competitors or market dynamics"
   },
   {
@@ -25,6 +28,7 @@
     "ticker": "MSFT",
     "question": "What are Microsoft's primary sources of revenue?",
     "expected_topics": ["cloud", "Azure", "Office", "LinkedIn"],
+    "ground_truth": "Microsoft's primary revenue sources are: (1) cloud-based solutions including Microsoft 365 (Office commercial and consumer), Azure cloud services, Dynamics 365, LinkedIn, and Xbox Game Pass — collectively called the Microsoft Cloud; (2) software licensing and support including Windows OEM and on-premises server products; (3) online advertising through Bing search and news; (4) devices including Surface and PC accessories; (5) gaming including Xbox content and services; and (6) enterprise and partner services including consulting.",
     "notes": "Should break down by segment"
   },
   {
@@ -32,6 +36,7 @@
     "ticker": "MSFT",
     "question": "What risks does Microsoft identify related to AI and machine learning?",
     "expected_topics": ["AI", "regulation", "ethics", "competition"],
+    "ground_truth": "Microsoft identifies the following AI-related risks: flawed or biased AI algorithms that could cause harm or expose the company to liability; regulatory uncertainty around AI with evolving laws in the EU, US, and globally; reputational risks from AI-generated harmful content or misinformation; competitive pressure as AI capabilities become commoditised; and the risk that AI features may not meet customer expectations or achieve expected returns on significant R&D investment.",
     "notes": "Day 14 baseline — AI risk language is evolving fast"
   },
   {
@@ -39,6 +44,7 @@
     "ticker": "TSLA",
     "question": "How does Tesla describe its manufacturing risks?",
     "expected_topics": ["production", "Gigafactory", "supply chain", "recall"],
+    "ground_truth": "Tesla describes manufacturing risks including: uncertainties inherent in ramping new manufacturing operations, particularly at Gigafactories; reliance on complex supply chains and single-source suppliers for key components such as battery cells; risk of production disruptions from natural disasters, supplier failures, or geopolitical events; product recalls due to manufacturing defects that could harm brand reputation and incur significant costs; and challenges scaling production of new models and technologies at high volume.",
     "notes": "Should mention specific facilities or processes"
   },
   {
@@ -46,6 +52,7 @@
     "ticker": "TSLA",
     "question": "What does Tesla say about its dependence on key personnel?",
     "expected_topics": ["Elon Musk", "key person", "retention"],
+    "ground_truth": "Tesla identifies its dependence on key personnel as a material risk factor, specifically naming Elon Musk, Chief Executive Officer. The company states that the loss of Mr. Musk or his inability to devote sufficient time to Tesla could adversely affect the business. Tesla also notes that competition for talent in the EV and technology industries is intense and that retaining skilled engineers, designers, and executives is critical to its business.",
     "notes": "Classic risk factor — tests retrieval of specific named entities"
   },
   {
@@ -53,6 +60,7 @@
     "ticker": "GOOGL",
     "question": "What regulatory risks does Alphabet face?",
     "expected_topics": ["antitrust", "GDPR", "EU", "advertising"],
+    "ground_truth": "Alphabet faces significant regulatory risks including: antitrust investigations and litigation in the US (DOJ, FTC) and EU regarding Google Search, Google Play, and digital advertising market dominance; data privacy regulations including GDPR in Europe and state-level privacy laws in the US; AI regulation under the EU AI Act and emerging global frameworks; content moderation liability under evolving platform responsibility laws; and potential fines, remedies, or mandated changes to business practices that could materially affect revenue.",
     "notes": "Should mention geographic regulatory differences"
   },
   {
@@ -60,6 +68,7 @@
     "ticker": "GOOGL",
     "question": "How does Alphabet describe its advertising revenue risks?",
     "expected_topics": ["advertising", "revenue", "competition", "privacy"],
+    "ground_truth": "Alphabet describes advertising revenue risks including: intense competition from Meta, Amazon, Apple, TikTok, and others for digital advertising spend; signal loss from third-party cookie deprecation and Apple's App Tracking Transparency reducing ad targeting effectiveness; macroeconomic sensitivity of ad budgets which are cut quickly in downturns; regulatory pressure on targeted advertising practices; and the risk that AI-generated search summaries may reduce ad clicks and search query volume.",
     "notes": "Tests retrieval of financial risk language"
   },
   {
@@ -67,6 +76,87 @@
     "ticker": "AMZN",
     "question": "What does Amazon say about its labour and employment risks?",
     "expected_topics": ["labour", "workforce", "unionisation", "wages"],
+    "ground_truth": "Amazon identifies labour risks including: intense competition for qualified personnel especially in technology, AI, and logistics; risks from labour organising and unionisation efforts which could increase costs and constrain operational flexibility; wage inflation driven by minimum wage legislation and labour market conditions; workforce management complexity across its large global employee base; and reliance on third-party delivery partners whose labour practices could create reputational or regulatory risks.",
     "notes": "Tests retrieval of HR/operational risk sections"
+  },
+  {
+    "id": "q11",
+    "ticker": "AAPL",
+    "question": "What does Apple report as its Services segment net sales and what does it include?",
+    "expected_topics": ["Services", "App Store", "iCloud", "advertising"],
+    "ground_truth": "Apple's Services segment includes revenue from the App Store, AppleCare, iCloud, Apple TV+, Apple Music, Apple Arcade, Apple Pay, licensing arrangements, and other subscription services. Services is Apple's highest-margin segment and a key growth driver as hardware markets mature.",
+    "notes": "Tests retrieval of segment breakdown — Services is strategically important"
+  },
+  {
+    "id": "q12",
+    "ticker": "AAPL",
+    "question": "What does Apple say about its exposure to tariffs and international trade policy risks?",
+    "expected_topics": ["tariffs", "China", "supply chain", "trade"],
+    "ground_truth": "Apple identifies international trade policy as a significant risk. Tariffs, trade restrictions, and geopolitical tensions — particularly between the US and China — could increase the cost of components and finished goods, disrupt supply chains, and reduce demand in affected markets. Apple manufactures a substantial majority of its products in China through contract manufacturers, making it highly exposed to any changes in US-China trade relations.",
+    "notes": "Highly topical given current US-China trade tensions — tests retrieval of trade risk language"
+  },
+  {
+    "id": "q13",
+    "ticker": "MSFT",
+    "question": "What cybersecurity risks does Microsoft identify in its filing?",
+    "expected_topics": ["cyberattack", "data breach", "ransomware", "state-sponsored"],
+    "ground_truth": "Microsoft identifies cybersecurity risks including: sophisticated cyberattacks targeting its cloud infrastructure, products, and customer data; state-sponsored attacks from nation-state actors seeking to compromise Microsoft systems or use Microsoft services to attack customers; ransomware and supply chain attacks; risks from vulnerabilities in third-party software integrated into Microsoft products; and the growing regulatory obligation to disclose material cybersecurity incidents promptly under SEC rules.",
+    "notes": "Microsoft is a prime target for nation-state attackers — highly specific risk language"
+  },
+  {
+    "id": "q14",
+    "ticker": "MSFT",
+    "question": "What are Microsoft's three operating segments and what does each include?",
+    "expected_topics": ["Productivity", "Intelligent Cloud", "More Personal Computing", "Azure"],
+    "ground_truth": "Microsoft has three operating segments: (1) Productivity and Business Processes — includes Microsoft 365 (commercial and consumer), Exchange, SharePoint, Teams, LinkedIn, and Dynamics 365; (2) Intelligent Cloud — includes Azure and other cloud services, SQL Server, Windows Server, GitHub, and enterprise support services; (3) More Personal Computing — includes Windows OEM and commercial, Bing search and advertising, Surface devices, Xbox gaming (hardware, content, Game Pass), and Activision Blizzard games.",
+    "notes": "Fundamental business structure question — tests factual retrieval accuracy"
+  },
+  {
+    "id": "q15",
+    "ticker": "TSLA",
+    "question": "How does Tesla describe competition in the electric vehicle market?",
+    "expected_topics": ["competition", "EV", "traditional automakers", "China"],
+    "ground_truth": "Tesla acknowledges intensifying competition in the EV market from: traditional automakers including GM, Ford, Volkswagen, Toyota, and BMW which are rapidly expanding EV lineups; new pure-play EV companies including Rivian and Lucid; and Chinese manufacturers including BYD, NIO, and Li Auto which compete aggressively on price especially in Asia. Tesla notes that many competitors have greater financial resources, manufacturing scale, and established dealer networks.",
+    "notes": "Competitive landscape has changed rapidly — tests current filing content vs training data"
+  },
+  {
+    "id": "q16",
+    "ticker": "TSLA",
+    "question": "How does Tesla describe its Energy Generation and Storage segment?",
+    "expected_topics": ["Megapack", "Powerwall", "solar", "energy storage"],
+    "ground_truth": "Tesla's Energy Generation and Storage segment sells solar energy products (Solar Roof integrated solar tiles and solar panels) and battery energy storage products (Powerwall for residential use and Megapack for utility-scale and commercial applications). The segment benefits from growing demand for grid-scale battery storage as renewable energy penetration increases.",
+    "notes": "Tests retrieval of non-vehicle business segment — important for understanding Tesla beyond cars"
+  },
+  {
+    "id": "q17",
+    "ticker": "GOOGL",
+    "question": "How does Alphabet describe the performance and strategy of Google Cloud?",
+    "expected_topics": ["Google Cloud", "revenue", "AWS", "AI", "growth"],
+    "ground_truth": "Google Cloud provides infrastructure, data analytics, AI and machine learning services, and productivity tools (Google Workspace) to enterprise customers. The segment has achieved consistent revenue growth and reached profitability. It competes directly with AWS (Amazon) and Microsoft Azure. Alphabet is investing heavily in AI capabilities within Google Cloud, positioning it as a key growth driver as enterprises adopt AI infrastructure.",
+    "notes": "Cloud is Alphabet's fastest-growing segment — tests recent financial narrative"
+  },
+  {
+    "id": "q18",
+    "ticker": "GOOGL",
+    "question": "What does Alphabet say about risks from content on its platforms?",
+    "expected_topics": ["YouTube", "content moderation", "misinformation", "liability"],
+    "ground_truth": "Alphabet identifies platform content risks including: harmful, misleading, or illegal content on YouTube and other platforms that could damage brand reputation and advertiser trust; regulatory obligations and potential liability under content moderation laws in various jurisdictions; the challenges of moderating content at scale across billions of users and in multiple languages; and the risk that AI-generated content could accelerate misinformation at a pace that exceeds moderation capabilities.",
+    "notes": "YouTube content policy is a recurring regulatory and reputational flashpoint"
+  },
+  {
+    "id": "q19",
+    "ticker": "AMZN",
+    "question": "How does Amazon describe its AWS segment and its contribution to the business?",
+    "expected_topics": ["AWS", "cloud", "revenue", "operating income", "growth"],
+    "ground_truth": "AWS (Amazon Web Services) is Amazon's cloud computing segment providing on-demand compute, storage, database, AI/ML, and analytics services to enterprises, startups, and government customers worldwide. AWS generates the majority of Amazon's consolidated operating income despite representing a smaller share of total revenue, making it the primary profit engine of the company. AWS competes with Microsoft Azure and Google Cloud and continues to invest heavily in AI infrastructure and services.",
+    "notes": "AWS profitability vs retail margin contrast is a key business model insight"
+  },
+  {
+    "id": "q20",
+    "ticker": "AMZN",
+    "question": "What does Amazon say about the competitive environment across its business segments?",
+    "expected_topics": ["competition", "retail", "cloud", "advertising", "logistics"],
+    "ground_truth": "Amazon faces intense competition across all major segments: in retail, it competes with Walmart, Target, Costco, and speciality retailers as well as marketplace sellers; in cloud, it competes with Microsoft Azure and Google Cloud; in digital advertising, it competes with Google and Meta; in streaming, it competes with Netflix, Disney+, and other video services; and in logistics, it competes with UPS, FedEx, and regional carriers. Amazon notes that many competitors have greater resources in specific verticals.",
+    "notes": "Cross-segment competition question tests breadth of retrieval across the full filing"
   }
 ]

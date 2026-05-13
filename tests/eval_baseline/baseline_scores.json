@@ -1,0 +1,8 @@
+{
+  "faithfulness": 0.8502,
+  "answer_relevancy": 0.8511,
+  "hallucination": 0.138,
+  "contextual_relevancy": 0.3264,
+  "contextual_precision": 0.4481,
+  "contextual_recall": 0.8308
+}

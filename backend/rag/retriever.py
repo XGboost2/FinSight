@@ -104,12 +104,18 @@ def search(
     query_sparse: tuple[list[int], list[float]],
     filing_id: str,
     top_k: int = 5,
+    item_filter: list[str] | None = None,
 ) -> list[dict]:
-    """Hybrid search: dense + sparse via Reciprocal Rank Fusion (RRF)."""
+    """Hybrid search: dense + sparse via Reciprocal Rank Fusion (RRF).
+
+    item_filter: if provided, restricts search to specific 10-K sections
+    e.g. ["1A"] for Risk Factors, ["7"] for MD&A.
+    """
     client = _client()
-    filing_filter = Filter(
-        must=[FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
-    )
+    must = [FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
+    if item_filter:
+        must.append(FieldCondition(key="item", match=MatchAny(any=item_filter)))
+    filing_filter = Filter(must=must)
     sp_indices, sp_values = query_sparse
     result = client.query_points(
         collection_name=COLLECTION,
@@ -149,12 +155,14 @@ def search_multi(
     query_sparse: tuple[list[int], list[float]],
     filing_ids: list[str],
     top_k: int = 5,
+    item_filter: list[str] | None = None,
 ) -> list[dict]:
     """Hybrid search across multiple filing IDs (e.g. 10-K + 10-Q together)."""
     client = _client()
-    filing_filter = Filter(
-        must=[FieldCondition(key="filing_id", match=MatchAny(any=filing_ids))]
-    )
+    must = [FieldCondition(key="filing_id", match=MatchAny(any=filing_ids))]
+    if item_filter:
+        must.append(FieldCondition(key="item", match=MatchAny(any=item_filter)))
+    filing_filter = Filter(must=must)
     sp_indices, sp_values = query_sparse
     result = client.query_points(
         collection_name=COLLECTION,

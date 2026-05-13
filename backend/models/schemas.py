@@ -50,6 +50,7 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     ticker: str = Field(..., min_length=1, max_length=10)
     model: str | None = None  # None = auto-route
+    include_context: bool = False  # set True to get full chunk text (eval only)
 
 
 class SourceChunk(BaseModel):
@@ -65,6 +66,14 @@ class ChatResponse(BaseModel):
     tokens_out: int
     cost_usd: float
     latency_ms: float
+    trace_id: str | None = None
+    contexts: list[str] | None = None  # full chunk text, only when include_context=True
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str = Field(..., min_length=1)
+    helpful: bool
+    comment: str | None = Field(default=None, max_length=500)
 
 
 # === Company Search / Ingest (Day 15) ===

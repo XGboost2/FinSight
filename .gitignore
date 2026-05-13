@@ -34,6 +34,14 @@ MANIFEST
 # Graphify Output
 graphify-out/
 
+# DeepEval
+.deepeval/.deepeval-cache.json
+.deepeval/.deepeval_telemetry.txt
+.deepeval/.latest_run_full.json
+.deepeval/.latest_test_run.json
+tests/eval_baseline/results/
+tests/eval_baseline/.venv/
+
 # Node
 node_modules/
 dist/

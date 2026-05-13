@@ -11,10 +11,35 @@ Reranker (BGE cross-encoder): rescores RRF candidates by true relevance — simi
 """
 
 import logging
+import re
 
 from rag.embedder import embed_documents, embed_query, sparse_encode
 from rag.retriever import ensure_collection, search, search_multi, upsert_chunks
 from rag.reranker import rerank
+
+# Maps regex patterns (matched against the question) to 10-K Item numbers.
+# Queries matching a pattern are restricted to those sections in Qdrant,
+# eliminating irrelevant chunks from financial tables, boilerplate, etc.
+_SECTION_ROUTING: list[tuple[re.Pattern, list[str]]] = [
+    (re.compile(r"risk|threat|challenge|vulnerabilit|expos|uncertaint|hazard", re.I), ["1A"]),
+    (re.compile(r"cybersecurit|data breach|hack|attack|infosec", re.I),               ["1A", "1C"]),
+    (re.compile(r"competi|market.?share|rival|industry.?position|strategic", re.I),   ["1", "1A"]),
+    (re.compile(r"revenue|sales|income|profit|margin|earnings|cost|expense|financial.?result|growth|segment", re.I), ["7", "7A"]),
+    (re.compile(r"outlook|guidance|forward.?look|strategy|management.?discuss|md&a", re.I), ["7"]),
+    (re.compile(r"sentiment|tone|language|wording", re.I),                            ["7"]),
+    (re.compile(r"governance|director|board|compensation|executive|officer", re.I),   ["10", "11"]),
+    (re.compile(r"lawsuit|litigation|legal|court|regulatory.?action|enforcement", re.I), ["3", "1A"]),
+    (re.compile(r"audit|internal.?control|accounting|disclosure.?control", re.I),     ["9A"]),
+    (re.compile(r"business|operation|product|service|segment|employee|workforce|personnel", re.I), ["1"]),
+]
+
+
+def _detect_section(question: str) -> list[str] | None:
+    """Return Item numbers to restrict search to, or None to search all sections."""
+    for pattern, items in _SECTION_ROUTING:
+        if pattern.search(question):
+            return items
+    return None
 
 try:
     from langfuse.decorators import observe, langfuse_context
@@ -55,23 +80,36 @@ def ingest(filing_id: str, chunks: list[dict]) -> int:
 
 @observe()
 def retrieve(question: str, filing_id: str, top_k: int = 5) -> list[dict]:
-    """Hybrid search → RRF → rerank → top-k chunks."""
+    """Hybrid search → section-aware filter → RRF → rerank → top-k chunks."""
     query_vector = embed_query(question)
     query_sparse = sparse_encode(question)
 
-    candidates = search(query_vector, query_sparse, filing_id, top_k=top_k * _RERANK_POOL)
-    chunks = rerank(question, candidates, top_k=top_k)
+    section_items = _detect_section(question)
+    # Tighten to top-3 when section-filtered: fewer but more precise chunks
+    effective_top_k = 3 if section_items else top_k
+
+    candidates = search(
+        query_vector, query_sparse, filing_id,
+        top_k=effective_top_k * _RERANK_POOL,
+        item_filter=section_items,
+    )
+    chunks = rerank(question, candidates, top_k=effective_top_k)
 
     langfuse_context.update_current_observation(
         name="rag-retrieve",
         input=question,
         output=str([c["text"][:100] for c in chunks]),
-        metadata={"filing_id": filing_id, "candidates": len(candidates), "returned": len(chunks)},
+        metadata={
+            "filing_id": filing_id,
+            "section_filter": section_items,
+            "candidates": len(candidates),
+            "returned": len(chunks),
+        },
     )
 
     logger.info(
-        "RAG retrieve: %d candidates → %d reranked for filing %s (top score: %s)",
-        len(candidates), len(chunks), filing_id,
+        "RAG retrieve: %d candidates → %d reranked for filing %s | section=%s (top score: %s)",
+        len(candidates), len(chunks), filing_id, section_items,
         chunks[0].get("rerank_score", chunks[0]["score"]) if chunks else "n/a",
     )
     return chunks
@@ -79,25 +117,37 @@ def retrieve(question: str, filing_id: str, top_k: int = 5) -> list[dict]:
 
 @observe()
 def retrieve_multi(question: str, filing_ids: list[str], top_k: int = 5) -> list[dict]:
-    """Hybrid search across multiple filing IDs → RRF → rerank → top-k chunks."""
+    """Hybrid search across multiple filing IDs → section-aware filter → RRF → rerank → top-k chunks."""
     if not filing_ids:
         return []
     query_vector = embed_query(question)
     query_sparse = sparse_encode(question)
 
-    candidates = search_multi(query_vector, query_sparse, filing_ids, top_k=top_k * _RERANK_POOL)
-    chunks = rerank(question, candidates, top_k=top_k)
+    section_items = _detect_section(question)
+    effective_top_k = 3 if section_items else top_k
+
+    candidates = search_multi(
+        query_vector, query_sparse, filing_ids,
+        top_k=effective_top_k * _RERANK_POOL,
+        item_filter=section_items,
+    )
+    chunks = rerank(question, candidates, top_k=effective_top_k)
 
     langfuse_context.update_current_observation(
         name="rag-retrieve-multi",
         input=question,
         output=str([c["text"][:100] for c in chunks]),
-        metadata={"filing_ids": filing_ids, "candidates": len(candidates), "returned": len(chunks)},
+        metadata={
+            "filing_ids": filing_ids,
+            "section_filter": section_items,
+            "candidates": len(candidates),
+            "returned": len(chunks),
+        },
     )
 
     logger.info(
-        "RAG retrieve_multi: %d candidates → %d reranked across %d filings (top score: %s)",
-        len(candidates), len(chunks), len(filing_ids),
+        "RAG retrieve_multi: %d candidates → %d reranked across %d filings | section=%s (top score: %s)",
+        len(candidates), len(chunks), len(filing_ids), section_items,
         chunks[0].get("rerank_score", chunks[0]["score"]) if chunks else "n/a",
     )
     return chunks

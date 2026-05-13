@@ -23,6 +23,8 @@ except ImportError:
         def update_current_observation(**_): pass
         @staticmethod
         def update_current_trace(**_): pass
+        @staticmethod
+        def get_current_trace_id() -> str | None: return None
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,7 @@ Question: {query}"""
         metadata={"cost_usd": result["cost_usd"], "latency_ms": result["latency_ms"], "query_len": len(query)},
     )
 
+    result["trace_id"] = langfuse_context.get_current_trace_id()
     return result
 
 

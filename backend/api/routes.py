@@ -26,6 +26,7 @@ from models.schemas import (
     NewsResponse,
     ChatRequest,
     ChatResponse,
+    FeedbackRequest,
     CompanyInfo,
     CompareRequest,
     ChangedParagraph,
@@ -583,7 +584,35 @@ async def chat(request: ChatRequest) -> ChatResponse:
         tokens_out=llm_result["tokens_out"],
         cost_usd=llm_result["cost_usd"],
         latency_ms=llm_result["latency_ms"],
+        trace_id=llm_result.get("trace_id"),
+        contexts=[c["text"] for c in relevant_chunks] if request.include_context else None,
     )
+
+
+@router.post("/chat/feedback")
+async def submit_feedback(body: FeedbackRequest) -> dict:
+    """Record thumbs-up/down on a chat response back to Langfuse as a BOOLEAN score."""
+    from services.observability import init_langfuse
+
+    client = init_langfuse()
+    if not client:
+        logger.info("Feedback received but Langfuse not configured — skipping score")
+        return {"ok": True, "scored": False}
+
+    try:
+        client.score(
+            trace_id=body.trace_id,
+            name="user_feedback",
+            value=1.0 if body.helpful else 0.0,
+            data_type="BOOLEAN",
+            comment=body.comment,
+        )
+        logger.info("Feedback scored: trace_id=%s helpful=%s", body.trace_id, body.helpful)
+    except Exception as e:
+        logger.warning("Langfuse score failed: %s", e)
+        raise HTTPException(502, f"Failed to record feedback: {e}")
+
+    return {"ok": True, "scored": True}
 
 
 @router.get("/health", response_model=HealthResponse)

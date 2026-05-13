@@ -355,7 +355,11 @@ finsight-ai/
 └── tests/
     ├── conftest.py
     ├── test_routes.py
-    └── eval_baseline/questions.json   ← 10 hand-curated RAG Q&A pairs (RAGAS)
+    └── eval_baseline/
+        ├── run_eval.py                ← DeepEval runner — 6 metrics, custom DeepSeekJudge, caching
+        ├── questions.json             ← 20 hand-curated Q&A pairs with ground truth across 5 tickers
+        ├── baseline_scores.json       ← locked baseline scores (updated each --set-baseline run)
+        └── results/                   ← timestamped per-run score history
 ```
 
 ---
@@ -388,13 +392,13 @@ finsight-ai/
 - [x] Three rotating log files (finsight, llm, tasks)
 - [x] Session persistence across browser refresh (localStorage)
 - [x] Unit tests — backend (pytest) + frontend (vitest)
-- [x] RAGAS eval baseline (10 hand-curated Q&A pairs)
 - [x] Langfuse tracing — `@observe` across all LLM calls, RAG retrieval, ingest, report, debate. Nested span hierarchy with cost + latency per generation
+- [x] **DeepEval baseline** — faithfulness 0.85 · answer relevancy 0.85 · hallucination 0.14 · contextual recall 0.83 · contextual precision 0.45 · contextual relevancy 0.33. Custom DeepSeekJudge wrapper (`max_tokens=8192`), 20 hand-curated Q&A pairs with ground truth across 5 tickers, result caching, weekly CI gate
+- [x] **Section-aware retrieval** — query intent routing to 10-K sections (Item 1A for risk, Item 7 for financials, etc.) via Qdrant `item` filter. Reduces irrelevant chunk co-retrieval. Hallucination dropped from 0.20 → 0.14 (-30%)
 - [x] MIT License
 
 ### In Progress / Next
 - [ ] **Structured agent report protocol** — Pydantic typed outputs between agents (before CrewAI)
-- [ ] **RAGAS eval run** — score current retrieval quality as baseline before agent changes
 
 ### Planned
 - [ ] **CrewAI analyst crew** — 4 parallel analysts (Fundamentals, News, Sentiment, Risk) + Bull/Bear researchers + Report Writer
