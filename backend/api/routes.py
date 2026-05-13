@@ -555,7 +555,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
     try:
-        llm_result = await ask_llm(request.question, context, model=request.model)
+        llm_result = await ask_llm(request.question, context, model=request.model, ticker=request.ticker)
     except Exception as e:
         logger.error("LLM call failed for ticker=%s: %s", request.ticker, e, exc_info=True)
         raise HTTPException(502, f"LLM call failed: {e}")

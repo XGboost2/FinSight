@@ -10,6 +10,20 @@ from typing import Any
 from config import get_settings
 from cache.cost_tracker import record_cost
 
+try:
+    from langfuse.decorators import observe, langfuse_context
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
+    def observe(*args, **kwargs):        # type: ignore
+        def decorator(fn): return fn
+        return decorator if args and callable(args[0]) else decorator
+    class langfuse_context:             # type: ignore
+        @staticmethod
+        def update_current_observation(**_): pass
+        @staticmethod
+        def update_current_trace(**_): pass
+
 logger = logging.getLogger(__name__)
 
 # Cost per 1M tokens (USD) — update as pricing changes
@@ -71,10 +85,12 @@ def _route_model(query: str) -> str:
     return CHEAP_MODEL
 
 
+@observe(as_type="generation")
 async def ask_llm(
     query: str,
     context: str,
     model: str | None = None,
+    ticker: str | None = None,
 ) -> dict[str, Any]:
     """Send a question + filing context to the LLM.
 
@@ -83,6 +99,12 @@ async def ask_llm(
     Returns:
         {answer, model_used, tokens_in, tokens_out, cost_usd, latency_ms}
     """
+    langfuse_context.update_current_trace(
+        name=f"chat/{ticker}" if ticker else "chat",
+        user_id=ticker,
+        tags=["chat"],
+        metadata={"ticker": ticker},
+    )
     settings = get_settings()
     start = time.perf_counter()
 
@@ -133,11 +155,21 @@ Question: {query}"""
         from cache.redis_client import get_redis
         record_cost(get_redis(), result["model_used"], result["cost_usd"], result["tokens_in"], result["tokens_out"])
     except Exception:
-        pass  # cost tracking is non-critical
+        pass
+
+    langfuse_context.update_current_observation(
+        name=f"ask-llm/{result['model_used']}",
+        model=result["model_used"],
+        input=user_message,
+        output=result["answer"],
+        usage={"input": result["tokens_in"], "output": result["tokens_out"], "unit": "TOKENS"},
+        metadata={"cost_usd": result["cost_usd"], "latency_ms": result["latency_ms"], "query_len": len(query)},
+    )
 
     return result
 
 
+@observe(as_type="generation")
 async def call_llm_raw(
     prompt: str,
     max_tokens: int = 2500,
@@ -199,7 +231,16 @@ async def call_llm_raw(
         from cache.redis_client import get_redis
         record_cost(get_redis(), m, _calc_cost(m, tok_in, tok_out), tok_in, tok_out)
     except Exception:
-        pass  # cost tracking is non-critical
+        pass
+
+    langfuse_context.update_current_observation(
+        name=f"call-llm-raw/{m}",
+        model=m,
+        input={"prompt_preview": prompt[:500], "prompt_chars": len(prompt)},
+        output=text[:2000],
+        usage={"input": tok_in, "output": tok_out, "unit": "TOKENS"},
+        metadata={"cost_usd": _calc_cost(m, tok_in, tok_out), "max_tokens": max_tokens},
+    )
 
     return text, tok_in, tok_out, m
 

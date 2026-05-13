@@ -19,6 +19,7 @@ from jobs.refresh_tickers import refresh_ticker_index
 from rag.retriever import ensure_collection
 from api.routes import router as api_router
 from logging_config import setup_logging
+from services.observability import init_langfuse, flush as langfuse_flush
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("FinSight AI starting up (env=%s)", settings.ENVIRONMENT)
+    init_langfuse()
     logger.info("LLM: Anthropic=%s OpenAI=%s",
                 "ok" if settings.ANTHROPIC_API_KEY else "missing",
                 "ok" if settings.OPENAI_API_KEY else "missing")
@@ -58,6 +60,7 @@ async def lifespan(app: FastAPI):
     yield
 
     scheduler.shutdown(wait=False)
+    langfuse_flush()
     logger.info("FinSight AI shutting down")
 
 

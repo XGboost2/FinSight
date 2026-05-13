@@ -56,6 +56,7 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 |---------|--------|
 | **Rate Limiting** | `slowapi` backed by Redis (shared across Uvicorn workers). Per-endpoint limits: ingest 5/min, diff 5/min, sentiment 5/min, report 10/min, compare 10/min, technicals 20/min, news 20/min, dashboard 30/min, search 60/min. Returns 429 + Retry-After |
 | **Structured Logging** | Three rotating log files: `finsight.log` (all), `llm.log` (LLM calls only), `tasks.log` (Celery). 10MB × 5 backups each. Named loggers with propagation |
+| **Langfuse Tracing** | Full `@observe` instrumentation across every LLM call, RAG retrieval, ingest, report generation, and debate. Nested span hierarchy: `report-lookup → report-generate → retrieve-multi × 5 → call-llm-raw + debate`. Chat traces tagged with `user_id=ticker`, `tags=["chat"]`. Cache hits visible. No-op when keys absent |
 | **Redis TTL Strategy** | Different TTLs per data type: sentiment 30d, diff 30d, report 24h, dashboard 7d, news 1hr, technicals 1hr. Matches how often data actually changes |
 | **Session Persistence** | Last selected company persists across browser refresh via localStorage. Restore is two fast Redis reads — no pipeline re-execution |
 | **Graceful Degradation** | Every LLM call has a mock fallback. Reranker falls back to RRF order on failure. News failures don't block the report |
@@ -104,6 +105,7 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       ├── services/
       │     edgar_pipeline.py        ← multi-filing pipeline + deterministic 8-K classifier
       │     llm.py                   ← DeepSeek → Anthropic → OpenAI → mock fallback chain
+      │     observability.py         ← Langfuse init + flush, @observe across all LLM/RAG calls
       │     dashboard.py             ← XBRL metrics + LLM narrative, Redis 7d cache
       │     report.py                ← analysis report: findings, risk, bull/bear, debate
       │     diff.py                  ← YoY risk factor diff (difflib + BGE semantic matching)
@@ -177,6 +179,7 @@ Top 5 chunks by reranker score → LLM context
 | Vector DB | Qdrant 1.9+ — dense + sparse hybrid, RRF fusion, filing-scoped filters |
 | Sentiment | `ProsusAI/finbert` via HuggingFace transformers (CPU, 110M params) |
 | LLM | DeepSeek (primary) · Anthropic Claude · OpenAI (switchable per-request) |
+| Observability | Langfuse 3 — `@observe` tracing, nested spans, cost + latency per call |
 | Financial Data | SEC EDGAR XBRL API (deterministic) · yfinance (technical indicators) |
 | News | Finnhub API |
 | Cache | Redis 8 — DB 0: app data · DB 1: Celery broker/backend |
@@ -274,9 +277,11 @@ FINNHUB_API_KEY=...
 QDRANT_URL=http://qdrant:6333
 REDIS_URL=redis://redis:6379
 
-# Reserved — being wired in
-LANGFUSE_SECRET_KEY=
-LANGFUSE_PUBLIC_KEY=
+# Observability — get keys from Langfuse UI → Settings → API Keys
+# Tracing is a no-op when these are absent (safe to omit in dev)
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com   # EU cloud; use https://us.cloud.langfuse.com for US
 ```
 
 ---
@@ -312,6 +317,7 @@ finsight-ai/
 │   ├── services/
 │   │   ├── edgar_pipeline.py          ← multi-filing pipeline + 8-K classifier
 │   │   ├── llm.py                     ← DeepSeek → Claude → OpenAI → mock chain
+│   │   ├── observability.py           ← Langfuse init + flush (called at lifespan)
 │   │   ├── dashboard.py               ← XBRL + LLM, Redis 7d cache
 │   │   ├── report.py                  ← analysis report + JSON repair + 3-attempt retry
 │   │   ├── diff.py                    ← YoY risk factor diff
@@ -383,10 +389,10 @@ finsight-ai/
 - [x] Session persistence across browser refresh (localStorage)
 - [x] Unit tests — backend (pytest) + frontend (vitest)
 - [x] RAGAS eval baseline (10 hand-curated Q&A pairs)
+- [x] Langfuse tracing — `@observe` across all LLM calls, RAG retrieval, ingest, report, debate. Nested span hierarchy with cost + latency per generation
 - [x] MIT License
 
 ### In Progress / Next
-- [ ] **LangFuse tracing** — wire every LLM call, cost and latency observability dashboard
 - [ ] **Structured agent report protocol** — Pydantic typed outputs between agents (before CrewAI)
 - [ ] **RAGAS eval run** — score current retrieval quality as baseline before agent changes
 
