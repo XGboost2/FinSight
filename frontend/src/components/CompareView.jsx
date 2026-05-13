@@ -159,8 +159,8 @@ export default function CompareView({ comparison, loading, error, onBack }) {
     setReports({})
     setReportsLoading(true)
     Promise.all([
-      axios.get(`${API_URL}/api/companies/${ticker1}/report`).then(r => ({ ticker: ticker1, data: r.data })).catch(() => null),
-      axios.get(`${API_URL}/api/companies/${ticker2}/report`).then(r => ({ ticker: ticker2, data: r.data })).catch(() => null),
+      axios.get(`${API_URL}/api/companies/${ticker1}/analysis`).then(r => ({ ticker: ticker1, data: r.data })).catch(() => null),
+      axios.get(`${API_URL}/api/companies/${ticker2}/analysis`).then(r => ({ ticker: ticker2, data: r.data })).catch(() => null),
     ]).then(results => {
       const map = {}
       results.forEach(r => { if (r) map[r.ticker] = r.data })

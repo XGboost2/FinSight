@@ -223,6 +223,54 @@ async def get_dashboard(request: Request, ticker: str) -> DashboardResponse:
     return DashboardResponse(**{k: v for k, v in metrics.items() if k != "ticker"}, ticker=ticker)
 
 
+# ── LangGraph Analysis Pipeline ─────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/analysis", response_model=AnalysisReport)
+@limiter.limit("5/minute")
+async def get_analysis(request: Request, ticker: str, refresh: bool = False) -> AnalysisReport:
+    """
+    Full analysis via LangGraph pipeline — 4 parallel nodes (fundamentals, risk,
+    sentiment, news) feeding a synthesis node. Replaces the sequential /report endpoint.
+    Results cached 24h in Redis.
+    """
+    from agents.graph import run_analysis
+    import json as _json
+
+    ticker = ticker.upper()
+    logger.info("LangGraph analysis request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+
+    if not is_ingested(redis, ticker):
+        raise HTTPException(404, f"No filing for '{ticker}'. Call /ingest first.")
+
+    cache_key = f"finsight:analysis:{ticker}"
+
+    if not refresh:
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info("Analysis cache hit: %s", ticker)
+            return AnalysisReport(**_json.loads(cached))
+
+    record = get_filing_record(redis, ticker)
+    company_info = get_ticker_info(redis, ticker) or {}
+
+    try:
+        final_state = await run_analysis(ticker, record["filing_id"], company_info)
+    except Exception as e:
+        logger.error("LangGraph pipeline failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"Analysis pipeline failed: {e}")
+
+    report = final_state.get("report", {})
+    if not report.get("verdict"):
+        logger.warning("Analysis incomplete for %s — not caching", ticker)
+        raise HTTPException(502, "Analysis pipeline produced incomplete report")
+
+    redis.setex(cache_key, 60 * 60 * 24, _json.dumps(report))
+    logger.info("Analysis cached: %s (TTL 24h)", ticker)
+    return AnalysisReport(**report)
+
+
 # ── Analysis Report ──────────────────────────────────────────────────
 
 

@@ -50,7 +50,7 @@ export default function ReportView({ ticker, compact = false, ingesting = false,
     onStatusChange?.('loading')
     try {
       const { data } = await axios.get(
-        `${API_URL}/api/companies/${ticker}/report${refresh ? '?refresh=true' : ''}`
+        `${API_URL}/api/companies/${ticker}/analysis${refresh ? '?refresh=true' : ''}`
       )
       setReport(data)
       onStatusChange?.('done')

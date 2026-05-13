@@ -19,6 +19,9 @@ apscheduler>=3.10.0
 # Agents + Task Queue
 celery>=5.3.0
 
+# LangGraph — multi-node analysis pipeline
+langgraph>=0.2.0
+
 # Technical indicators (Feature 14)
 yfinance>=0.2.40
 pandas>=2.0.0

@@ -2,7 +2,7 @@
 
 **Financial Risk Intelligence Platform** — ingests SEC EDGAR 10-K, 10-Q, and 8-K filings, stores them as hybrid vector embeddings, and delivers multi-tab AI-powered fundamental analysis grounded in source documents.
 
-Built as a portfolio project demonstrating production-grade AI engineering: multi-filing RAG pipeline with cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, multi-provider LLM routing with cost tracking, rate limiting, and a fully reactive analyst UI.
+Built as a portfolio project demonstrating production-grade AI engineering: LangGraph multi-agent pipeline with Pydantic AI typed contracts, section-aware RAG with cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, DeepEval evaluation baseline, multi-provider LLM routing with cost tracking, and a fully reactive analyst UI.
 
 ---
 
@@ -35,10 +35,12 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 ### AI Analysis
 | Feature | Detail |
 |---------|--------|
-| **Comprehensive Analysis Report** | Full equity research note: findings table (Revenue / Profitability / Risk / Sentiment with signal badges), risk score gauge (0–100), trend narrative, management themes, bull/bear case bullets, verdict. Cached 24h in Redis |
+| **LangGraph Pipeline** | `StateGraph` fan-out/fan-in: 4 nodes run in parallel (fundamentals, risk, sentiment, news) → synthesis. Typed Pydantic contracts between nodes. `GET /api/companies/{ticker}/analysis`. 24h Redis cache |
+| **Pydantic Agent Contracts** | `FundamentalsOutput`, `RiskOutput`, `SentimentOutput`, `NewsOutput`, `ReportOutput` — validated at every node boundary. Next: Pydantic AI agents slot in replacing raw node functions |
+| **Comprehensive Analysis Report** | Full equity research note: findings table (Revenue / Profitability / Risk / Sentiment with signal badges), risk score gauge (0–100), trend narrative, management themes, bull/bear case bullets, verdict |
 | **FinBERT Sentiment** | `ProsusAI/finbert` runs locally on CPU — zero API cost. Scores MD&A (Item 7) chunks: positive / negative / neutral. Aggregates to continuous scalar `(avg_pos - avg_neg + 1) / 2`. Filters boilerplate before inference |
 | **YoY Risk Factor Diff** | Compares Item 1A text between current and prior year 10-K using `difflib` + BGE semantic matching. Classifies paragraphs as new / changed / removed / unchanged. Handles rewording that isn't a real change |
-| **Bull/Bear Debate** | LLM-simulated 4-turn investment debate grounded in filing data. Placeholder for CrewAI multi-agent debate (Feature 3c) |
+| **Bull/Bear Debate** | 4-turn LLM debate grounded in filing data. Next: replaced by real Pydantic AI Bull + Bear agents doing multi-turn reasoning with tool access |
 | **Technical Analysis** | yfinance fetches 1-year daily OHLCV. Computes RSI(14), MACD(12,26,9), SMA50, SMA200, Bollinger Bands (20,2), Volume ratio. LLM generates verdict. TradingView Technical Analysis widget alongside |
 | **Company News** | Finnhub API — recent headlines with FinBERT sentiment per article. 1hr Redis cache |
 
@@ -113,6 +115,12 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       │     sentiment.py             ← FinBERT on Item 7 chunks (CPU, 30d Redis cache)
       │     technical.py             ← yfinance OHLCV → RSI/MACD/SMA/BB/Vol + LLM verdict
       │
+      ├── agents/
+      │     contracts.py             ← Pydantic I/O contracts between nodes (FundamentalsOutput, RiskOutput…)
+      │     state.py                 ← AnalysisState TypedDict with typed node outputs
+      │     nodes.py                 ← node_fundamentals, node_risk, node_sentiment, node_news, node_synthesize
+      │     graph.py                 ← StateGraph: START → [4 parallel nodes] → synthesize → END
+      │
       ├── tasks/
       │     edgar_tasks.py           ← Celery: ingest → embed → classify → pre-gen report
       │
@@ -134,9 +142,12 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
 ```
 User query
     ↓
+Section intent detection — regex routes query to Item numbers
+  e.g. "risk" → Item 1A only · "revenue" → Item 7 only
+    ↓
 BGE embed (query) + sparse encode
     ↓
-Qdrant hybrid search — top 20 candidates
+Qdrant hybrid search — top candidates (section-filtered)
   ├── Dense branch: cosine similarity (BAAI/bge-base-en-v1.5)
   └── Sparse branch: BM25/IDF (exact financial term matching)
     ↓
@@ -144,8 +155,10 @@ Reciprocal Rank Fusion (RRF) — merges dense + sparse ranked lists
     ↓
 BGE reranker (BAAI/bge-reranker-base) — reads query + chunk together, scores relevance
     ↓
-Top 5 chunks by reranker score → LLM context
+Top 3 chunks (section-filtered) or top 5 (unfiltered) → LLM context
 ```
+
+Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irrelevant chunks before they reach the LLM.
 
 ### LLM Routing
 
@@ -178,8 +191,11 @@ Top 5 chunks by reranker score → LLM context
 | Reranker | `BAAI/bge-reranker-base` via fastembed (ONNX, CPU, 280MB) |
 | Vector DB | Qdrant 1.9+ — dense + sparse hybrid, RRF fusion, filing-scoped filters |
 | Sentiment | `ProsusAI/finbert` via HuggingFace transformers (CPU, 110M params) |
+| Agent Orchestration | LangGraph 0.2+ — `StateGraph` fan-out/fan-in parallelism, typed state |
+| Agent Contracts | Pydantic AI (next) — typed tool outputs, `result_type` enforcement |
 | LLM | DeepSeek (primary) · Anthropic Claude · OpenAI (switchable per-request) |
 | Observability | Langfuse 3 — `@observe` tracing, nested spans, cost + latency per call |
+| Eval | DeepEval — 6 RAG metrics, DeepSeek judge, 20 Q&A pairs, result caching |
 | Financial Data | SEC EDGAR XBRL API (deterministic) · yfinance (technical indicators) |
 | News | Finnhub API |
 | Cache | Redis 8 — DB 0: app data · DB 1: Celery broker/backend |
@@ -197,7 +213,8 @@ Top 5 chunks by reranker score → LLM context
 |--------|------|-----------|-------------|
 | `POST` | `/api/companies/{ticker}/ingest` | 5/min | Queue Celery ingest task. Returns `task_id` |
 | `GET` | `/api/companies/{ticker}/ingest/status` | — | Poll Celery task status + progress step |
-| `GET` | `/api/companies/{ticker}/report` | 10/min | Full analysis report. `?refresh=true` to regenerate |
+| `GET` | `/api/companies/{ticker}/analysis` | 5/min | LangGraph pipeline report. `?refresh=true` to regenerate |
+| `GET` | `/api/companies/{ticker}/report` | 10/min | Legacy sequential report (fallback) |
 | `GET` | `/api/companies/{ticker}/dashboard` | 30/min | XBRL metrics + LLM narrative |
 | `GET` | `/api/companies/{ticker}/diff` | 5/min | YoY risk factor diff (new/changed/removed) |
 | `GET` | `/api/companies/{ticker}/sentiment` | 5/min | FinBERT MD&A sentiment score |
@@ -397,14 +414,16 @@ finsight-ai/
 - [x] **Section-aware retrieval** — query intent routing to 10-K sections (Item 1A for risk, Item 7 for financials, etc.) via Qdrant `item` filter. Reduces irrelevant chunk co-retrieval. Hallucination dropped from 0.20 → 0.14 (-30%)
 - [x] MIT License
 
-### In Progress / Next
-- [ ] **Structured agent report protocol** — Pydantic typed outputs between agents (before CrewAI)
+- [x] **LangGraph analysis pipeline** — `StateGraph` with fan-out/fan-in parallelism. 4 nodes run simultaneously (fundamentals/XBRL, risk/RAG, FinBERT sentiment, Finnhub news) → synthesis node. Exposed at `GET /api/companies/{ticker}/analysis`. 24h Redis cache
+- [x] **Structured agent protocol** — Pydantic contracts (`contracts.py`) for all inter-node data: `FundamentalsOutput`, `RiskOutput`, `SentimentOutput`, `NewsOutput`, `ReportOutput`. Nodes validate inputs/outputs at boundaries. CrewAI agents must implement these contracts
+
+### Next
+- [ ] **Pydantic AI agents** — 7 typed agents replacing raw node functions: `FundamentalsAnalyst`, `RiskAnalyst`, `SentimentAnalyst`, `NewsAnalyst`, `BullResearcher`, `BearResearcher`, `ReportWriter`. Each agent has `result_type=<Contract>` and tool access to RAG/XBRL/APIs
+- [ ] **Real Bull/Bear debate** — Bull + Bear agents run sequentially, each calling `search_filings` to find counter-evidence. Replaces the current single-LLM-call simulation
 
 ### Planned
-- [ ] **CrewAI analyst crew** — 4 parallel analysts (Fundamentals, News, Sentiment, Risk) + Bull/Bear researchers + Report Writer
-- [ ] **LangGraph orchestrator** — StateGraph with ReAct prompting, parallel analyst nodes, Bull/Bear debate rounds, Risk Manager gate
-- [ ] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final pipeline output
-- [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code, Ruflo, and any MCP client
+- [ ] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final LangGraph node
+- [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code and any MCP client
 - [ ] **LangGraph checkpoint resumption** — RedisSaver crash-safe pipeline (60–120s runs)
 - [ ] **Full citation trail** — every finding traces to exact filing chunk
 - [ ] **Persistent analysis journal** — risk score / sentiment tracked over time per company
@@ -412,7 +431,6 @@ finsight-ai/
 - [ ] **Competitor extraction** — spaCy NER on Item 1 → ticker-matched competitor graph
 - [ ] **Peer auto-suggest** — SIC code matching for automatic peer group discovery
 - [ ] **Segment revenue breakdown** — XBRL segment data, donut chart per company
-- [ ] **Event timeline** — 8-K events overlaid on price chart
 - [ ] **GCP Cloud Run deployment** — containerised, auto-scaling, target Day 70
 
 ---
@@ -430,6 +448,10 @@ finsight-ai/
 **Why DeepSeek as primary LLM?** Comparable quality to GPT-4 for financial document analysis at ~800x lower cost. Every call logs cost — the savings story becomes a LangFuse interview talking point.
 
 **Why Celery over async tasks?** `async/await` keeps the HTTP request open — a 30-60 second ingest would time out browsers. Celery returns a `task_id` immediately; the pipeline runs in a worker process. The request/response separation is the right pattern for long-running jobs.
+
+**Why Pydantic AI over CrewAI?** Pydantic AI agents return typed Pydantic models directly (`result_type=RiskOutput`) — enforced at the boundary, not parsed from strings. No second orchestration layer competing with LangGraph. Consistent with the rest of the codebase. CrewAI's role/backstory prompting is cosmetic; Pydantic AI's typed contracts are structural.
+
+**Why LangGraph as orchestrator?** The analysis pipeline is a DAG with parallel branches and a fan-in synthesis step — exactly what `StateGraph` is built for. LangGraph provides checkpointing, typed state, and explicit node/edge definitions. Plain `asyncio.gather` would work but gives no observability, resumption, or state inspection.
 
 ---
 
