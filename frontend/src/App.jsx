@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { TrendingUp, GitCompare, X, DollarSign, Sun, Moon } from 'lucide-react'
+
+
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import CompanySearch from './components/CompanySearch'
 import Dashboard from './components/Dashboard'
@@ -92,6 +94,15 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Restore last company on refresh
+  useEffect(() => {
+    const saved = localStorage.getItem('finsight-last-company')
+    if (saved) {
+      try { handleSelectPrimary(JSON.parse(saved)) }
+      catch { localStorage.removeItem('finsight-last-company') }
+    }
+  }, [])
+
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light'
     setTheme(next)
@@ -99,6 +110,7 @@ export default function App() {
   }
 
   const handleSelectPrimary = async (company) => {
+    localStorage.setItem('finsight-last-company', JSON.stringify(company))
     setPrimary(company)
     setPrimaryFiling(null)
     setPrimaryDash(null)
@@ -153,6 +165,7 @@ export default function App() {
   }
 
   const goHome = () => {
+    localStorage.removeItem('finsight-last-company')
     setPrimary(null)
     setPrimaryFiling(null)
     setPrimaryDash(null)

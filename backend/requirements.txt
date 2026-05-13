@@ -20,6 +20,16 @@ apscheduler>=3.10.0
 celery>=5.3.0
 flower>=2.0.0
 
+# Technical indicators (Feature 14)
+yfinance>=0.2.40
+pandas>=2.0.0
+
+# Rate limiting
+slowapi>=0.1.9
+
+# JSON repair — fixes malformed LLM JSON output
+json-repair>=0.25.0
+
 # FinBERT sentiment (Feature 2) — CPU-only torch
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.0.0

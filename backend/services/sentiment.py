@@ -33,19 +33,34 @@ def _get_pipeline():
     )
 
 
+def _is_boilerplate(text: str) -> bool:
+    """Skip section headers and short boilerplate that carries no sentiment signal."""
+    t = text.strip()
+    if len(t) < 120:
+        return True
+    lower = t.lower()
+    return (
+        lower.startswith("item ") or
+        "should be read in conjunction" in lower or
+        "incorporated herein by reference" in lower or
+        "table of contents" in lower
+    )
+
+
 def _score_chunks(chunks: list[dict]) -> dict:
-    if not chunks:
+    meaningful = [c for c in chunks if not _is_boilerplate(c["text"])]
+    if not meaningful:
         return _empty_result()
 
     pipe = _get_pipeline()
-    texts = [c["text"][:1500] for c in chunks]   # trim before tokeniser
+    texts = [c["text"][:1500] for c in meaningful]   # trim before tokeniser
 
     all_scores = pipe(texts, batch_size=8, top_k=None)
 
     pos_sum = neg_sum = neu_sum = 0.0
     polarised: list[tuple[float, dict]] = []
 
-    for chunk, scores in zip(chunks, all_scores):
+    for chunk, scores in zip(meaningful, all_scores):
         score_map = {s["label"]: s["score"] for s in scores}
         pos = score_map.get("positive", 0.0)
         neg = score_map.get("negative", 0.0)
@@ -59,12 +74,12 @@ def _score_chunks(chunks: list[dict]) -> dict:
         label = "positive" if pos >= neg and pos >= neu else \
                 "negative" if neg >= pos and neg >= neu else "neutral"
         polarised.append((polarity, {
-            "text":  chunk["text"][:200],
+            "text":  chunk["text"][:500],
             "label": label,
             "score": round(max(pos, neg, neu), 3),
         }))
 
-    n = len(chunks)
+    n = len(meaningful)
     avg_pos = pos_sum / n
     avg_neg = neg_sum / n
     avg_neu = neu_sum / n

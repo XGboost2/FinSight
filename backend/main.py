@@ -8,6 +8,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from limiter import limiter
 
 from cache.redis_client import get_redis
 from cache.ticker_cache import load_tickers_into_redis, TICKERS_KEY
@@ -64,6 +67,9 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

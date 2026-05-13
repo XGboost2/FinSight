@@ -19,6 +19,17 @@ REPORT_PREFIX = "finsight:report:"
 REPORT_TTL = 60 * 60 * 24  # 24h — refresh daily
 
 
+def _clean_json(raw: str) -> str:
+    """Strip markdown fences and leading/trailing whitespace from LLM output."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return raw.strip()
+
+
 def _filing_belongs_to_ticker(record: dict, ticker: str, redis_client) -> bool:
     """Check if a registry record belongs to a ticker via its stored metadata."""
     from services.store import get_filing
@@ -219,37 +230,44 @@ Return only the JSON object. No markdown fences, no explanation."""
 
     start = time.perf_counter()
 
-    try:
-        raw, tok_in, tok_out, model_used = await call_llm_raw(prompt, max_tokens=2500)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        report = json.loads(raw.strip())
-        report["ticker"] = ticker.upper()
-        report["company_name"] = company_info.get("name", ticker) if company_info else ticker
-        report["generated_at"] = datetime.now(timezone.utc).isoformat()
-        report["financial_data"] = xbrl
-        logger.info(
-            "Report generated: %s model=%s tok_in=%d tok_out=%d cost=$%.4f latency=%.0fms",
-            ticker, model_used, tok_in, tok_out,
-            _calc_cost(model_used, tok_in, tok_out),
-            (time.perf_counter() - start) * 1000,
-        )
+    last_error: Exception | None = None
+    for attempt in range(1, 4):  # up to 3 attempts
+        try:
+            raw, tok_in, tok_out, model_used = await call_llm_raw(prompt, max_tokens=2500)
+            raw = _clean_json(raw)
+            try:
+                report = json.loads(raw)
+            except json.JSONDecodeError:
+                from json_repair import repair_json
+                logger.warning("Report JSON malformed for %s (attempt %d) — running json-repair", ticker, attempt)
+                report = json.loads(repair_json(raw))
 
-        # Generate debate transcript (single LLM call, cached with report)
-        report["debate_transcript"] = await _generate_debate(
-            ticker, report.get("bull_case", []), report.get("bear_case", [])
-        )
+            report["ticker"] = ticker.upper()
+            report["company_name"] = company_info.get("name", ticker) if company_info else ticker
+            report["generated_at"] = datetime.now(timezone.utc).isoformat()
+            report["financial_data"] = xbrl
+            logger.info(
+                "Report generated: %s attempt=%d model=%s tok_in=%d tok_out=%d cost=$%.4f latency=%.0fms",
+                ticker, attempt, model_used, tok_in, tok_out,
+                _calc_cost(model_used, tok_in, tok_out),
+                (time.perf_counter() - start) * 1000,
+            )
 
-        return report
-    except Exception as e:
-        logger.error("Report generation failed for %s: %s", ticker, e, exc_info=True)
-        return {
-            "ticker": ticker.upper(),
-            "company_name": company_info.get("name", ticker) if company_info else ticker,
-            "error": str(e),
-        }
+            report["debate_transcript"] = await _generate_debate(
+                ticker, report.get("bull_case", []), report.get("bear_case", [])
+            )
+            return report
+
+        except Exception as e:
+            last_error = e
+            logger.warning("Report attempt %d failed for %s: %s", attempt, ticker, e)
+
+    logger.error("Report generation failed after 3 attempts for %s: %s", ticker, last_error)
+    return {
+        "ticker": ticker.upper(),
+        "company_name": company_info.get("name", ticker) if company_info else ticker,
+        "error": str(last_error),
+    }
 
 
 async def _generate_debate(ticker: str, bull_case: list[str], bear_case: list[str]) -> list[dict]:

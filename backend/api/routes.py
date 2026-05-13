@@ -6,7 +6,8 @@ All endpoints return Pydantic models. Never raw dicts.
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from limiter import limiter
 
 from config import get_settings
 from cache.filing_registry import (
@@ -48,6 +49,7 @@ from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
 from ingestion.news import get_or_fetch_news
 from services.report import get_or_generate_report
+from services.technical import get_or_fetch_technicals
 from services.sentiment import get_or_score_sentiment
 from ingestion.xbrl import get_revenue_trend
 from services.llm import ask_llm
@@ -68,7 +70,8 @@ router = APIRouter(prefix="/api", tags=["FinSight"])
 
 
 @router.get("/companies/search", response_model=SearchResponse)
-async def search_companies(q: str = Query(..., min_length=1)) -> SearchResponse:
+@limiter.limit("60/minute")
+async def search_companies(request: Request, q: str = Query(..., min_length=1)) -> SearchResponse:
     """Search companies by name or ticker. Pure Redis, zero API calls."""
     logger.info("Company search: q=%r", q)
     redis = get_redis()
@@ -96,7 +99,8 @@ async def get_company_info(ticker: str) -> CompanyInfo:
 
 
 @router.post("/companies/{ticker}/ingest")
-async def ingest_company(ticker: str, force: bool = False):
+@limiter.limit("5/minute")
+async def ingest_company(request: Request, ticker: str, force: bool = False):
     """
     Queue EDGAR ingestion as a Celery background task.
     Returns task_id immediately. Poll /ingest/status?task_id=... for progress.
@@ -198,7 +202,8 @@ async def company_events(ticker: str):
 
 
 @router.get("/companies/{ticker}/dashboard", response_model=DashboardResponse)
-async def get_dashboard(ticker: str) -> DashboardResponse:
+@limiter.limit("30/minute")
+async def get_dashboard(request: Request, ticker: str) -> DashboardResponse:
     """Return cached dashboard metrics. Triggers extraction if cache expired."""
     ticker = ticker.upper()
     logger.info("Dashboard request: %s", ticker)
@@ -221,7 +226,8 @@ async def get_dashboard(ticker: str) -> DashboardResponse:
 
 
 @router.get("/companies/{ticker}/report", response_model=AnalysisReport)
-async def get_report(ticker: str, refresh: bool = False) -> AnalysisReport:
+@limiter.limit("10/minute")
+async def get_report(request: Request, ticker: str, refresh: bool = False) -> AnalysisReport:
     """Generate comprehensive 10-K analysis report: findings table, bull/bear cases, verdict."""
     ticker = ticker.upper()
     logger.info("Report request: %s refresh=%s", ticker, refresh)
@@ -249,7 +255,8 @@ async def get_report(ticker: str, refresh: bool = False) -> AnalysisReport:
 
 
 @router.get("/companies/{ticker}/diff", response_model=YoYDiffResponse)
-async def get_yoy_diff(ticker: str, refresh: bool = False) -> YoYDiffResponse:
+@limiter.limit("5/minute")
+async def get_yoy_diff(request: Request, ticker: str, refresh: bool = False) -> YoYDiffResponse:
     """Year-over-year 10-K diff: Business (Item 1), Risk Factors (Item 1A), MD&A (Item 7).
 
     Fetches prior year 10-K from EDGAR, stores in Qdrant, computes semantic diff,
@@ -292,7 +299,8 @@ async def get_yoy_diff(ticker: str, refresh: bool = False) -> YoYDiffResponse:
 
 
 @router.get("/companies/{ticker}/news", response_model=NewsResponse)
-async def get_news(ticker: str, refresh: bool = False) -> NewsResponse:
+@limiter.limit("20/minute")
+async def get_news(request: Request, ticker: str, refresh: bool = False) -> NewsResponse:
     """Fetch recent company news via Finnhub, scored with FinBERT. 1hr Redis cache."""
     ticker = ticker.upper()
     logger.info("News request: %s refresh=%s", ticker, refresh)
@@ -312,7 +320,8 @@ async def get_news(ticker: str, refresh: bool = False) -> NewsResponse:
 
 
 @router.get("/companies/{ticker}/sentiment", response_model=SentimentResult)
-async def get_sentiment(ticker: str, refresh: bool = False) -> SentimentResult:
+@limiter.limit("5/minute")
+async def get_sentiment(request: Request, ticker: str, refresh: bool = False) -> SentimentResult:
     """FinBERT sentiment scoring on MD&A (Item 7). 30-day Redis cache.
     Use ?refresh=true to force rescore.
     """
@@ -335,16 +344,36 @@ async def get_sentiment(ticker: str, refresh: bool = False) -> SentimentResult:
     return SentimentResult(**result)
 
 
+# ── Technical Analysis ───────────────────────────────────────────────
+
+
+@router.get("/companies/{ticker}/technicals")
+@limiter.limit("20/minute")
+async def get_technicals(request: Request, ticker: str, refresh: bool = False):
+    """RSI, MACD, SMA50/200, Bollinger Bands, Volume + LLM verdict. 1h Redis cache."""
+    ticker = ticker.upper()
+    logger.info("Technicals request: %s refresh=%s", ticker, refresh)
+    redis = get_redis()
+    try:
+        result = await get_or_fetch_technicals(redis, ticker, refresh=refresh)
+    except Exception as e:
+        logger.error("Technicals failed for %s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, f"Technical analysis failed: {e}")
+    logger.info("Technicals served: %s overall=%s", ticker, result.get("overall_signal", "?"))
+    return result
+
+
 # ── Comparison Engine ────────────────────────────────────────────────
 
 
 @router.post("/companies/compare", response_model=CompareResponse)
-async def compare_companies(request: CompareRequest) -> CompareResponse:
+@limiter.limit("10/minute")
+async def compare_companies(request: Request, body: CompareRequest) -> CompareResponse:
     """Compare two companies head-to-head. Triggers ingest for any missing tickers."""
-    if len(request.tickers) != 2:
+    if len(body.tickers) != 2:
         raise HTTPException(400, "Exactly 2 tickers required")
 
-    t1, t2 = request.tickers[0].upper(), request.tickers[1].upper()
+    t1, t2 = body.tickers[0].upper(), body.tickers[1].upper()
     logger.info("Comparison request: %s vs %s", t1, t2)
     redis = get_redis()
 

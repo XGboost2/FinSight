@@ -1,14 +1,25 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+
+function getTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+}
 
 export default function StockChart({ ticker }) {
   const containerRef = useRef(null)
+  const [colorTheme, setColorTheme] = useState(getTheme)
 
+  // Track theme changes
+  useEffect(() => {
+    const observer = new MutationObserver(() => setColorTheme(getTheme()))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+
+  // Rebuild widget when ticker or theme changes
   useEffect(() => {
     if (!ticker || !containerRef.current) return
     const container = containerRef.current
     container.innerHTML = ''
-
-    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
 
     const widgetDiv = document.createElement('div')
     widgetDiv.className = 'tradingview-widget-container__widget'
@@ -24,14 +35,14 @@ export default function StockChart({ ticker }) {
       width:            '100%',
       height:           '100%',
       locale:           'en',
-      colorTheme:       theme,
+      colorTheme,
       isTransparent:    true,
       autosize:         true,
       showVolume:       false,
       showMA:           false,
       hideDateRanges:   false,
       hideMarketStatus: false,
-      hideSymbolLogo:   true,
+      hideSymbolLogo:   false,
       scalePosition:    'right',
       scaleMode:        'Normal',
       fontFamily:       'Inter, system-ui, sans-serif',
@@ -52,25 +63,7 @@ export default function StockChart({ ticker }) {
     container.appendChild(script)
 
     return () => { container.innerHTML = '' }
-  }, [ticker])
+  }, [ticker, colorTheme])
 
-  // Reapply theme when toggled
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      if (containerRef.current) {
-        const ticker_ = containerRef.current.dataset.ticker
-        if (ticker_) containerRef.current.dispatchEvent(new Event('themechange'))
-      }
-    })
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <div
-      ref={containerRef}
-      className="tv-symbol-overview"
-      data-ticker={ticker}
-    />
-  )
+  return <div ref={containerRef} className="tv-symbol-overview" />
 }
