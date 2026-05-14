@@ -1,6 +1,14 @@
 # Claude Code worktrees and session data
 .claude/
 
+# Obsidian local state (keep config files, ignore workspace state)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+
+# DeepEval cache
+.deepeval/
+tests/eval_baseline/.deepeval/
+
 # Environments
 .env
 .venv/
