@@ -1,3 +1,6 @@
+# Claude Code worktrees and session data
+.claude/
+
 # Environments
 .env
 .venv/
