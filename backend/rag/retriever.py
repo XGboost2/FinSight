@@ -30,6 +30,8 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from functools import lru_cache
+
 from config import get_settings
 from rag.embedder import VECTOR_DIM
 
@@ -38,6 +40,7 @@ logger = logging.getLogger(__name__)
 COLLECTION = "filings"
 
 
+@lru_cache(maxsize=1)
 def _client() -> QdrantClient:
     return QdrantClient(url=get_settings().QDRANT_URL)
 

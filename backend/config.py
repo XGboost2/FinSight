@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"  # development | staging | production
     LOG_LEVEL: str = "INFO"
     DEBUG: bool = True
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
 
     # --- LLM ---
     ANTHROPIC_API_KEY: str = ""

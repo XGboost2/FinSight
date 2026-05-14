@@ -24,7 +24,9 @@ before running synthesize. Each node isolates its own errors — a failed news
 fetch does not block the report generation.
 """
 
+import asyncio
 import logging
+import re
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -35,6 +37,9 @@ from agents.state import AnalysisState
 logger = logging.getLogger(__name__)
 
 _graph = None
+_graph_lock = asyncio.Lock()
+
+_TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 
 def _build() -> Any:
@@ -64,11 +69,13 @@ def _build() -> Any:
     return g.compile()
 
 
-def get_graph() -> Any:
+async def get_graph() -> Any:
     global _graph
     if _graph is None:
-        _graph = _build()
-        logger.info("LangGraph analysis pipeline compiled")
+        async with _graph_lock:
+            if _graph is None:
+                _graph = _build()
+                logger.info("LangGraph analysis pipeline compiled")
     return _graph
 
 
@@ -79,7 +86,9 @@ async def run_analysis(ticker: str, filing_id: str, company_info: dict) -> dict:
     Returns the final AnalysisState after all nodes complete.
     The report lives at state["report"].
     """
-    graph = get_graph()
+    if not _TICKER_RE.match(ticker.upper()):
+        raise ValueError(f"Invalid ticker format: {ticker}")
+    graph = await get_graph()
 
     initial_state: AnalysisState = {
         "ticker": ticker.upper(),

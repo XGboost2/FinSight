@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { useEffect } from 'react'
 import { TrendingUp, GitCompare, X, DollarSign, Sun, Moon } from 'lucide-react'
-
-
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+
+import { useCompanyStore } from './stores/companyStore'
+import { useCompareStore } from './stores/compareStore'
+import { useUIStore } from './stores/uiStore'
+
 import CompanySearch from './components/CompanySearch'
 import Dashboard from './components/Dashboard'
 import CompareView from './components/CompareView'
@@ -19,170 +21,61 @@ import RiskTab from './components/tabs/RiskTab'
 import TechnicalTab from './components/tabs/TechnicalTab'
 import BullBearTab from './components/tabs/BullBearTab'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const POLL_INTERVAL = 3000   // 3s polling for task status
-const POLL_TIMEOUT  = 300000 // 5 min max wait
-
-async function pollIngestStatus(ticker, taskId, onStep) {
-  const start = Date.now()
-  while (Date.now() - start < POLL_TIMEOUT) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL))
-    const { data } = await axios.get(`${API_URL}/api/companies/${ticker}/ingest/status?task_id=${taskId}`)
-    if (data.step) onStep(data.step)
-    if (data.status === 'done')  return data.result
-    if (data.status === 'error') throw new Error(data.error || 'Ingest failed')
-  }
-  throw new Error('Ingest timed out after 5 minutes')
-}
-
-async function ingestAndDashboard(ticker, onStep) {
-  const { data: ingest } = await axios.post(`${API_URL}/api/companies/${ticker}/ingest`)
-
-  if (ingest.status !== 'cached' && ingest.task_id) {
-    onStep('Fetching 10-K, 10-Q and 8-K from SEC EDGAR…')
-    await pollIngestStatus(ticker, ingest.task_id, onStep)
-    // Re-call ingest — now returns cached with real filing_id, chunk_count, filed_date
-    const { data: cached } = await axios.post(`${API_URL}/api/companies/${ticker}/ingest`)
-    const { data: dash } = await axios.get(`${API_URL}/api/companies/${ticker}/dashboard`)
-    return { ingest: cached, dashboard: dash }
-  }
-
-  const { data: dash } = await axios.get(`${API_URL}/api/companies/${ticker}/dashboard`)
-  return { ingest, dashboard: dash }
-}
-
 export default function App() {
-  const [primary, setPrimary] = useState(null)
-  const [primaryFiling, setPrimaryFiling] = useState(null)
-  const [primaryDash, setPrimaryDash] = useState(null)
-  const [primaryLoading, setPrimaryLoading] = useState(false)
-  const [primaryStep, setPrimaryStep] = useState('')
-  const [primaryError, setPrimaryError] = useState(null)
+  const {
+    primary, primaryFiling, primaryDash,
+    primaryLoading, primaryStep, primaryError,
+    selectPrimary, restoreFromStorage, goHome: companyGoHome,
+  } = useCompanyStore()
 
-  const [mountedTabs, setMountedTabs] = useState(new Set())
+  const {
+    compareMode, compareCompany, comparison,
+    compareLoading, compareError,
+    enterCompareMode, exitCompare: compareExit, selectCompare, reset: compareReset,
+  } = useCompareStore()
 
-  const [compareMode, setCompareMode] = useState(false)
-  const [compareCompany, setCompareCompany] = useState(null)
-  const [comparison, setComparison] = useState(null)
-  const [compareLoading, setCompareLoading] = useState(false)
-  const [compareError, setCompareError] = useState(null)
+  const {
+    activeAnalyst, mountedTabs, tabStatus, showCosts, theme,
+    setActiveAnalyst, mountAllTabs, resetTabs, updateTabStatus,
+    setShowCosts, toggleTheme, syncThemeToDOM, tickAutoTheme,
+  } = useUIStore()
 
-  const [showCosts, setShowCosts] = useState(false)
-  const [activeAnalyst, setActiveAnalyst] = useState('fundamentals')
-  const [tabStatus, setTabStatus] = useState({})
-
-  const updateTabStatus = (tab, status) =>
-    setTabStatus(prev => ({ ...prev, [tab]: status }))
-
-  const handleTabChange = (tab) => {
-    setActiveAnalyst(tab)
-    if (tab !== 'fundamentals') {
-      setMountedTabs(prev => new Set([...prev, tab]))
-    }
-  }
-
-  const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('finsight-theme')
-    if (saved) return saved
-    const hour = new Date().getHours()
-    return (hour >= 19 || hour < 7) ? 'dark' : 'light'
-  })
-
+  // Sync theme to DOM on mount
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('finsight-theme', theme)
-  }, [theme])
+    syncThemeToDOM()
+  }, [])
 
+  // Auto-theme tick every 60s
   useEffect(() => {
-    const interval = setInterval(() => {
-      const saved = localStorage.getItem('finsight-theme-manual')
-      if (saved) return
-      const hour = new Date().getHours()
-      setTheme(hour >= 19 || hour < 7 ? 'dark' : 'light')
-    }, 60 * 1000)
+    const interval = setInterval(tickAutoTheme, 60_000)
     return () => clearInterval(interval)
   }, [])
 
-  // Restore last company on refresh
+  // Restore last company on mount
   useEffect(() => {
-    const saved = localStorage.getItem('finsight-last-company')
-    if (saved) {
-      try { handleSelectPrimary(JSON.parse(saved)) }
-      catch { localStorage.removeItem('finsight-last-company') }
-    }
+    restoreFromStorage()
   }, [])
 
-  const toggleTheme = () => {
-    const next = theme === 'light' ? 'dark' : 'light'
-    setTheme(next)
-    localStorage.setItem('finsight-theme-manual', '1')
-  }
-
   const handleSelectPrimary = async (company) => {
-    localStorage.setItem('finsight-last-company', JSON.stringify(company))
-    setPrimary(company)
-    setPrimaryFiling(null)
-    setPrimaryDash(null)
-    setPrimaryError(null)
-    setPrimaryLoading(true)
-    setPrimaryStep('Queuing EDGAR agent…')
-    setComparison(null)
-    setCompareCompany(null)
-    setCompareMode(false)
-    setActiveAnalyst('fundamentals')
-    setTabStatus({})
-    setMountedTabs(new Set())
-
-    try {
-      const { ingest, dashboard } = await ingestAndDashboard(
-        company.ticker,
-        (step) => setPrimaryStep(step),
-      )
-      setPrimaryFiling(ingest)
-      setPrimaryDash(dashboard)
-      setMountedTabs(new Set(['news', 'sentiment', 'risk', 'technical', 'bullbear']))
-    } catch (e) {
-      setPrimaryError(e.response?.data?.detail || e.message || 'Failed to load filing.')
-    } finally {
-      setPrimaryLoading(false)
-      setPrimaryStep('')
-    }
+    compareReset()
+    resetTabs()
+    await selectPrimary(company)
+    mountAllTabs()
   }
 
-  const handleSelectCompare = async (company) => {
+  const handleSelectCompare = (company) => {
     if (!primary) return
-    setCompareCompany(company)
-    setComparison(null)
-    setCompareError(null)
-    setCompareLoading(true)
-
-    try {
-      const { data } = await axios.post(`${API_URL}/api/companies/compare`, {
-        tickers: [primary.ticker, company.ticker],
-      })
-      setComparison(data)
-    } catch (e) {
-      setCompareError(e.response?.data?.detail || 'Comparison failed.')
-    } finally {
-      setCompareLoading(false)
-    }
+    selectCompare(primary.ticker, company)
   }
 
   const exitCompare = () => {
-    setCompareMode(false)
-    setCompareCompany(null)
-    setComparison(null)
-    setCompareError(null)
+    compareExit()
   }
 
   const goHome = () => {
-    localStorage.removeItem('finsight-last-company')
-    setPrimary(null)
-    setPrimaryFiling(null)
-    setPrimaryDash(null)
-    setPrimaryError(null)
-    setActiveAnalyst('fundamentals')
-    exitCompare()
+    companyGoHome()
+    resetTabs()
+    compareReset()
   }
 
   const showCompare = compareMode && (compareLoading || comparison || compareError)
@@ -209,7 +102,7 @@ export default function App() {
         />
 
         {!compareMode && (
-          <button className="btn-compare" onClick={() => setCompareMode(true)} title="Compare with another company">
+          <button className="btn-compare" onClick={enterCompareMode} title="Compare with another company">
             <GitCompare size={14} /> Compare
           </button>
         )}
@@ -250,7 +143,7 @@ export default function App() {
           />
         ) : (
           <div className="workspace">
-            <AnalystSidebar activeTab={activeAnalyst} onTabChange={handleTabChange} tabStatus={tabStatus} />
+            <AnalystSidebar activeTab={activeAnalyst} onTabChange={setActiveAnalyst} tabStatus={tabStatus} />
 
             <PanelGroup direction="horizontal" className="panel-group">
               <Panel defaultSize={62} minSize={35} className="panel">

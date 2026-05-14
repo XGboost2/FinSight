@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 
+const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
+
+function sanitizeTicker(t) {
+  const upper = (t || '').toUpperCase().replace(/[^A-Z0-9.\-]/g, '')
+  return TICKER_RE.test(upper) ? upper : null
+}
+
 function getTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
 }
@@ -17,7 +24,8 @@ export default function StockChart({ ticker }) {
 
   // Rebuild widget when ticker or theme changes
   useEffect(() => {
-    if (!ticker || !containerRef.current) return
+    const safeTicker = sanitizeTicker(ticker)
+    if (!safeTicker || !containerRef.current) return
     const container = containerRef.current
     container.innerHTML = ''
 
@@ -30,7 +38,7 @@ export default function StockChart({ ticker }) {
     script.type = 'text/javascript'
     script.async = true
     script.innerHTML = JSON.stringify({
-      symbols:          [[ticker, `${ticker}|1M`]],
+      symbols:          [[safeTicker, `${safeTicker}|1M`]],
       chartOnly:        false,
       width:            '100%',
       height:           '100%',

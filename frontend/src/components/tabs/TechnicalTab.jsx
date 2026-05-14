@@ -4,6 +4,13 @@ import axios from 'axios'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
+
+function sanitizeTicker(t) {
+  const upper = (t || '').toUpperCase().replace(/[^A-Z0-9.\-]/g, '')
+  return TICKER_RE.test(upper) ? upper : null
+}
+
 function getTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
 }
@@ -26,7 +33,8 @@ function TradingViewWidget({ ticker, colorTheme }) {
   const containerRef = useRef(null)
 
   useEffect(() => {
-    if (!ticker || !containerRef.current) return
+    const safeTicker = sanitizeTicker(ticker)
+    if (!safeTicker || !containerRef.current) return
     const container = containerRef.current
     container.innerHTML = ''
 
@@ -38,7 +46,7 @@ function TradingViewWidget({ ticker, colorTheme }) {
     script.type = 'text/javascript'
     script.async = true
     script.innerHTML = JSON.stringify({
-      symbol: ticker, interval: '1D', width: '100%', height: 400,
+      symbol: safeTicker, interval: '1D', width: '100%', height: 400,
       isTransparent: true, showIntervalTabs: true, locale: 'en', colorTheme,
     })
     container.appendChild(script)

@@ -74,9 +74,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in get_settings().CORS_ORIGINS.split(",")
+    if o.strip()
+] if hasattr(get_settings(), "CORS_ORIGINS") and get_settings().CORS_ORIGINS else [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

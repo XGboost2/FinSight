@@ -21,11 +21,6 @@ def init_langfuse():
         logger.info("LangFuse: no keys set — tracing disabled (set LANGFUSE_SECRET_KEY + LANGFUSE_PUBLIC_KEY to enable)")
         return None
 
-    # Set env vars so @observe decorator picks them up automatically
-    os.environ["LANGFUSE_SECRET_KEY"] = s.LANGFUSE_SECRET_KEY
-    os.environ["LANGFUSE_PUBLIC_KEY"] = s.LANGFUSE_PUBLIC_KEY
-    os.environ["LANGFUSE_HOST"]       = s.LANGFUSE_BASE_URL
-
     from langfuse import Langfuse
     client = Langfuse(
         secret_key=s.LANGFUSE_SECRET_KEY,

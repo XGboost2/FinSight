@@ -4,6 +4,12 @@ import axios from 'axios'
 import ReportView from './ReportView'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
+
+function sanitizeTicker(t) {
+  const upper = (t || '').toUpperCase().replace(/[^A-Z0-9.\-]/g, '')
+  return TICKER_RE.test(upper) ? upper : null
+}
 
 function getTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
@@ -13,7 +19,9 @@ function CompareOverlayChart({ ticker1, ticker2, colorTheme }) {
   const containerRef = useRef(null)
 
   useEffect(() => {
-    if (!ticker1 || !ticker2 || !containerRef.current) return
+    const t1 = sanitizeTicker(ticker1)
+    const t2 = sanitizeTicker(ticker2)
+    if (!t1 || !t2 || !containerRef.current) return
     const container = containerRef.current
     container.innerHTML = ''
 
@@ -26,8 +34,8 @@ function CompareOverlayChart({ ticker1, ticker2, colorTheme }) {
     script.type = 'text/javascript'
     script.async = true
     script.innerHTML = JSON.stringify({
-      symbols:          [[ticker1, `${ticker1}|1D`]],
-      compareSymbol:    { symbol: ticker2, lineColor: 'rgba(41, 98, 255, 1)', lineWidth: 2 },
+      symbols:          [[t1, `${t1}|1D`]],
+      compareSymbol:    { symbol: t2, lineColor: 'rgba(41, 98, 255, 1)', lineWidth: 2 },
       chartOnly:        false,
       width:            '100%',
       height:           440,
