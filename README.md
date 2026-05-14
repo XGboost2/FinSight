@@ -455,6 +455,46 @@ finsight-ai/
 
 ---
 
+## Changelog
+
+### Day 16 — 2026-05-14
+
+**Pydantic AI agent pipeline**
+- Replaced all raw LangGraph node functions with typed Pydantic AI agents
+- `FundamentalsAnalyst` + `RiskAnalyst` — synthesis-only agents (pre-retrieve context, single LLM call, no tool loops)
+- `BullResearcher` + `BearResearcher` + `ReportWriter` — sequential debate chain, all synthesis-only with `retries=3`
+- `TechnicalAnalyst` — 5th parallel analyst node; RSI, MACD, SMA50/200, Bollinger Bands, volume ratio fed into Bull/Bear prompts for fundamental/technical convergence detection
+
+**Agent evaluation baseline**
+- `tests/eval_baseline/run_agent_eval.py` — 4-metric DeepEval pipeline for agent output quality
+- Custom `GEval` Agent Specificity metric: specificity **0.52 → 0.85** (measures whether bull/bear points cite exact numbers vs generic statements)
+- Hallucination: 0.39 → 0.35 with typed contracts enforcing structured output
+- Baseline locked: faithfulness 0.88 · answer relevancy 0.89 · hallucination 0.35 · specificity 0.85
+
+**Security hardening** (code review)
+- Ticker format validation (`^[A-Z0-9.\-]{1,10}$`) on every endpoint
+- Admin endpoints (`/admin/costs`, `/admin/refresh-tickers`) require `X-Admin-Key` header
+- CORS restricted from `allow_origins=["*"]` to configurable `CORS_ORIGINS` env var
+- Redis password authentication; Qdrant + Redis ports bound to `127.0.0.1` only
+- Error messages sanitized — internal exception details no longer exposed in 502 responses
+- Frontend `sanitizeTicker()` prevents XSS via TradingView script injection
+- `localStorage` validation prevents JSON injection on session restore
+
+**Infrastructure**
+- `@lru_cache` on Qdrant `_client()` — connection reused across requests
+- Shared `httpx.AsyncClient` singleton in `llm.py` — no new client per LLM call
+- `asyncio.Lock()` for thread-safe LangGraph graph compilation
+- RSI division-by-zero bug fixed in `technical.py`
+- `datetime.utcnow()` (deprecated) → `datetime.now(timezone.utc)`
+- Docker healthchecks added for Redis and Qdrant
+- Zustand state management + UI/theme redesign
+
+**Tests**
+- Rewrote full test suite to match Celery-based ingest API: 25/25 passing
+- Added ticker format validation tests, admin auth tests, task_id format tests
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
