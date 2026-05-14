@@ -21,7 +21,7 @@ const MODELS = [
   { value: 'gpt-4o',             label: 'GPT-4o',           group: 'OpenAI' },
 ]
 
-export default function FilingPanel({ ticker, companyName, filingId, filing, fetchingFiling }) {
+export default function FilingPanel({ ticker, companyName, filingId, filing, fetchingFiling, sessionId }) {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState([])
   const [chatLoading, setChatLoading] = useState(false)
@@ -45,15 +45,19 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     setChatLoading(true)
 
     try {
+      const headers = sessionId ? { 'X-Session-ID': sessionId } : {}
       const { data } = await axios.post(`${API_URL}/api/chat`, {
         question: text,
         ticker: ticker,
         model: selectedModel === 'auto' ? null : selectedModel,
-      })
+        session_id: sessionId ?? undefined,
+      }, { headers })
+      const cacheBadge = data.from_cache ? ' · cached' : ''
+      const historyBadge = data.history_len > 0 ? ` · ${data.history_len} turns` : ''
       setHistory(h => [...h, {
         role: 'assistant',
         text: data.answer,
-        meta: `${data.model_used} · $${data.cost_usd.toFixed(4)} · ${Math.round(data.latency_ms)}ms`,
+        meta: `${data.model_used} · $${data.cost_usd.toFixed(4)} · ${Math.round(data.latency_ms)}ms${cacheBadge}${historyBadge}`,
       }])
     } catch (e) {
       setHistory(h => [...h, {

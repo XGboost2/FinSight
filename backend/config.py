@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # --- Cache (Day 49+) ---
     REDIS_URL: str = "redis://localhost:6379"
 
+    # --- Sessions ---
+    SESSION_TTL_SECONDS: int = 3600  # 60 minutes inactivity
+
 
 @lru_cache
 def get_settings() -> Settings:

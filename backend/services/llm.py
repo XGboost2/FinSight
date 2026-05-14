@@ -105,6 +105,7 @@ async def ask_llm(
     context: str,
     model: str | None = None,
     ticker: str | None = None,
+    history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Send a question + filing context to the LLM.
 
@@ -131,24 +132,31 @@ async def ask_llm(
 
 Question: {query}"""
 
+    # Build messages array: system → history turns → current question
+    conversation: list[dict] = []
+    if history:
+        conversation.extend(history[-20:])  # last 10 turns max
+    conversation.append({"role": "user", "content": user_message})
+
     routed_model = model or _route_model(query)
     provider = _provider(routed_model)
-    logger.info("Model router: query_len=%d → %s (%s)", len(query), routed_model, provider)
+    logger.info("Model router: query_len=%d history=%d → %s (%s)",
+                len(query), len(history or []), routed_model, provider)
 
     if provider == "deepseek" and settings.DEEPSEEK_API_KEY:
-        result = await _call_deepseek(user_message, routed_model, settings)
+        result = await _call_deepseek(user_message, routed_model, settings, conversation)
     elif provider == "anthropic" and settings.ANTHROPIC_API_KEY:
-        result = await _call_anthropic(user_message, routed_model, settings)
+        result = await _call_anthropic(user_message, routed_model, settings, conversation)
     elif provider == "openai" and settings.OPENAI_API_KEY:
-        result = await _call_openai(user_message, routed_model, settings)
+        result = await _call_openai(user_message, routed_model, settings, conversation)
     else:
         logger.warning("No API key for provider=%s model=%s — falling back", provider, routed_model)
         if settings.DEEPSEEK_API_KEY:
-            result = await _call_deepseek(user_message, CHEAP_MODEL, settings)
+            result = await _call_deepseek(user_message, CHEAP_MODEL, settings, conversation)
         elif settings.ANTHROPIC_API_KEY:
-            result = await _call_anthropic(user_message, "claude-haiku-4-5", settings)
+            result = await _call_anthropic(user_message, "claude-haiku-4-5", settings, conversation)
         elif settings.OPENAI_API_KEY:
-            result = await _call_openai(user_message, "gpt-4o-mini", settings)
+            result = await _call_openai(user_message, "gpt-4o-mini", settings, conversation)
         else:
             result = _mock_response(query)
 
@@ -262,17 +270,19 @@ async def _call_anthropic(
     user_message: str,
     model: str,
     settings: Any,
+    conversation: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Call Anthropic Claude API."""
     import anthropic
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+    messages = conversation or [{"role": "user", "content": user_message}]
     response = await client.messages.create(
         model=model,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
     )
 
     tokens_in = response.usage.input_tokens
@@ -291,6 +301,7 @@ async def _call_deepseek(
     user_message: str,
     model: str,
     settings: Any,
+    conversation: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Call DeepSeek API (OpenAI-compatible, ~10x cheaper than Claude Haiku)."""
     from openai import AsyncOpenAI
@@ -300,13 +311,13 @@ async def _call_deepseek(
         base_url=settings.DEEPSEEK_BASE_URL,
     )
 
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += conversation or [{"role": "user", "content": user_message}]
+
     response = await client.chat.completions.create(
         model=model,
         max_tokens=1024,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        messages=messages,
     )
 
     usage = response.usage
@@ -326,19 +337,20 @@ async def _call_openai(
     user_message: str,
     model: str,
     settings: Any,
+    conversation: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Call OpenAI API."""
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += conversation or [{"role": "user", "content": user_message}]
+
     response = await client.chat.completions.create(
         model=model,
         max_tokens=1024,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        messages=messages,
     )
 
     usage = response.usage

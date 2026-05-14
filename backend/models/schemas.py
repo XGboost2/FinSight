@@ -50,8 +50,9 @@ class FilingListResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     ticker: str = Field(..., min_length=1, max_length=10)
-    model: str | None = None  # None = auto-route
+    model: str | None = None     # None = auto-route
     include_context: bool = False  # set True to get full chunk text (eval only)
+    session_id: str | None = None  # omit for sessionless (eval / direct API)
 
 
 class SourceChunk(BaseModel):
@@ -69,6 +70,8 @@ class ChatResponse(BaseModel):
     latency_ms: float
     trace_id: str | None = None
     contexts: list[str] | None = None  # full chunk text, only when include_context=True
+    from_cache: bool = False           # True when answer was served from session cache
+    history_len: int = 0               # number of prior turns in this session
 
 
 class FeedbackRequest(BaseModel):

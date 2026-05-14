@@ -89,6 +89,39 @@ async def _require_admin(key: str = Depends(_admin_key_header)):
     return key
 
 
+_session_id_header = APIKeyHeader(name="X-Session-ID", auto_error=False)
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+async def _get_session(session_id: str = Depends(_session_id_header)) -> str | None:
+    """Auto-create session on first touch, slide TTL on subsequent requests."""
+    if not session_id:
+        return None
+    if not _UUID_RE.match(session_id):
+        raise HTTPException(400, "Invalid session ID format")
+    from cache.session_store import get_or_create_session
+    get_or_create_session(get_redis(), session_id)
+    return session_id
+
+
+# ── Session management ───────────────────────────────────────────────
+
+
+@router.get("/session")
+async def validate_session(session_id: str = Depends(_get_session)) -> dict:
+    """Check if session is active. Auto-creates if X-Session-ID is a valid UUID."""
+    return {"valid": session_id is not None, "session_id": session_id}
+
+
+@router.delete("/session")
+async def end_session(session_id: str = Depends(_get_session)) -> dict:
+    """Explicitly end a session (logout)."""
+    from cache.session_store import delete_session
+    if session_id:
+        delete_session(get_redis(), session_id)
+    return {"ok": True}
+
+
 # ── Company Search (pure Redis — zero SEC API calls) ─────────────────
 
 
@@ -595,19 +628,49 @@ async def get_filing_detail(filing_id: str) -> FilingResponse:
 
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit("20/minute")
-async def chat(request: Request, request_body: ChatRequest) -> ChatResponse:
-    logger.info("Chat request: ticker=%s question=%r", request_body.ticker, request_body.question[:80])
+async def chat(
+    request: Request,
+    request_body: ChatRequest,
+    session_id: str | None = Depends(_get_session),
+) -> ChatResponse:
+    from cache.session_store import (
+        get_cached_answer, set_cached_answer,
+        get_chat_history, append_chat_turn,
+    )
+
     ticker = _validate_ticker(request_body.ticker)
+    # Session ID from dependency takes precedence; fall back to body field
+    sid = session_id or request_body.session_id
     redis = get_redis()
+
+    logger.info("Chat request: ticker=%s session=%s question=%r",
+                ticker, sid or "none", request_body.question[:80])
+
     if not is_ingested(redis, ticker):
-        logger.warning("Chat: no filing for %s", ticker)
         raise HTTPException(404, f"No filing for '{ticker}'. Ingest first.")
 
     record = get_filing_record(redis, ticker)
     filing_id = record["filing_id"]
 
-    # Multi-query retrieval — original question + section-targeted rephrasing
-    # prevents "outlook" questions from only matching risk factor chunks
+    # ── Session answer cache hit ──────────────────────────────────────
+    if sid:
+        cached = get_cached_answer(redis, sid, ticker, request_body.question)
+        if cached:
+            logger.info("Chat cache hit: session=%s ticker=%s", sid, ticker)
+            history = get_chat_history(redis, sid, ticker)
+            return ChatResponse(
+                answer=cached,
+                sources=[],
+                model_used="cached",
+                tokens_in=0,
+                tokens_out=0,
+                cost_usd=0.0,
+                latency_ms=0.0,
+                from_cache=True,
+                history_len=len(history) // 2,
+            )
+
+    # ── RAG retrieval ─────────────────────────────────────────────────
     section_queries = {
         "outlook": "management discussion analysis future outlook guidance strategy",
         "risk":    "risk factors material risks regulatory competition",
@@ -632,21 +695,35 @@ async def chat(request: Request, request_body: ChatRequest) -> ChatResponse:
         f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks
     )
 
+    # ── Load conversation history ─────────────────────────────────────
+    history = get_chat_history(redis, sid, ticker) if sid else []
+
+    # ── LLM call with history ─────────────────────────────────────────
     try:
-        llm_result = await ask_llm(request_body.question, context, model=request_body.model, ticker=ticker)
+        llm_result = await ask_llm(
+            request_body.question, context,
+            model=request_body.model,
+            ticker=ticker,
+            history=history or None,
+        )
     except Exception as e:
         logger.error("LLM call failed for ticker=%s: %s", ticker, e, exc_info=True)
         raise HTTPException(502, "LLM call failed")
 
     logger.info(
-        "Chat complete: ticker=%s model=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
-        ticker,
+        "Chat complete: ticker=%s session=%s model=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
+        ticker, sid or "none",
         llm_result["model_used"],
         llm_result["tokens_in"],
         llm_result["tokens_out"],
         llm_result["cost_usd"],
         llm_result["latency_ms"],
     )
+
+    # ── Persist to session ────────────────────────────────────────────
+    if sid:
+        append_chat_turn(redis, sid, ticker, request_body.question, llm_result["answer"])
+        set_cached_answer(redis, sid, ticker, request_body.question, llm_result["answer"])
 
     sources = [
         SourceChunk(chunk_index=c["chunk_index"], text_preview=c["text"][:200])
@@ -663,6 +740,8 @@ async def chat(request: Request, request_body: ChatRequest) -> ChatResponse:
         latency_ms=llm_result["latency_ms"],
         trace_id=llm_result.get("trace_id"),
         contexts=[c["text"] for c in relevant_chunks] if request_body.include_context else None,
+        from_cache=False,
+        history_len=len(history) // 2,
     )
 
 

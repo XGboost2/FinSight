@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import axios from 'axios'
 import { TrendingUp, GitCompare, X, DollarSign, Sun, Moon } from 'lucide-react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
@@ -21,7 +22,18 @@ import RiskTab from './components/tabs/RiskTab'
 import TechnicalTab from './components/tabs/TechnicalTab'
 import BullBearTab from './components/tabs/BullBearTab'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const SESSION_KEY = 'finsight-session-id'
+
 export default function App() {
+  const [sessionId, setSessionId] = useState(() => {
+    const saved = localStorage.getItem(SESSION_KEY)
+    if (saved) return saved
+    const id = crypto.randomUUID()
+    localStorage.setItem(SESSION_KEY, id)
+    return id
+  })
+
   const {
     primary, primaryFiling, primaryDash,
     primaryLoading, primaryStep, primaryError,
@@ -54,6 +66,22 @@ export default function App() {
   // Restore last company on mount
   useEffect(() => {
     restoreFromStorage()
+  }, [])
+
+  // Reset session on 401 (expired TTL)
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      res => res,
+      err => {
+        if (err.response?.status === 401) {
+          const newId = crypto.randomUUID()
+          localStorage.setItem(SESSION_KEY, newId)
+          setSessionId(newId)
+        }
+        return Promise.reject(err)
+      }
+    )
+    return () => axios.interceptors.response.eject(interceptor)
   }, [])
 
   const handleSelectPrimary = async (company) => {
@@ -209,6 +237,7 @@ export default function App() {
                       chunk_count: primaryFiling.chunk_count,
                     } : null}
                     fetchingFiling={primaryLoading}
+                    sessionId={sessionId}
                   />
                 </div>
               </Panel>
