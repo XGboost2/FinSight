@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader, AlertTriangle, BarChart2, Zap, Settings } from 'lucide-react'
 import StockChart from './StockChart'
+import { DashboardSkeleton } from './Skeleton'
 
 function TradingViewAdvanced({ ticker }) {
   const containerRef = useRef(null)
@@ -72,6 +73,24 @@ export default function Dashboard({ company, dashboard, loading, loadingStep, er
   if (!company) return null
   const { ticker, name } = company
 
+  if (loading && !dashboard) {
+    return (
+      <div className="dashboard">
+        <div className="dashboard-header glass-card">
+          <div className="dashboard-title">
+            <span className="dashboard-ticker">{ticker}</span>
+            <span className="dashboard-name">{name}</span>
+          </div>
+          <div className="dashboard-loading">
+            <Loader size={14} className="spin" />
+            <span>{loadingStep || 'Fetching filings…'}</span>
+          </div>
+        </div>
+        <DashboardSkeleton />
+      </div>
+    )
+  }
+
   return (
     <div className="dashboard">
       <div className="dashboard-header glass-card">
@@ -80,22 +99,22 @@ export default function Dashboard({ company, dashboard, loading, loadingStep, er
           <span className="dashboard-name">{name}</span>
         </div>
 
-        <div className="chart-toggle-group">
-          <button className={`toggle-btn ${!advanced ? 'active' : ''}`} onClick={() => setAdvanced(false)}>
-            <Zap size={14} /> Simple
+        <div className="chart-toggle-group" role="radiogroup" aria-label="Chart type">
+          <button className={`toggle-btn ${!advanced ? 'active' : ''}`} onClick={() => setAdvanced(false)} role="radio" aria-checked={!advanced}>
+            <Zap size={14} aria-hidden="true" /> Simple
           </button>
-          <button className={`toggle-btn ${advanced ? 'active' : ''}`} onClick={() => setAdvanced(true)}>
-            <Settings size={14} /> Advanced
+          <button className={`toggle-btn ${advanced ? 'active' : ''}`} onClick={() => setAdvanced(true)} role="radio" aria-checked={advanced}>
+            <Settings size={14} aria-hidden="true" /> Advanced
           </button>
         </div>
 
         {loading && (
-          <div className="dashboard-loading">
+          <div className="dashboard-loading" aria-live="polite">
             <Loader size={14} className="spin" />
             <span>{loadingStep || 'Fetching filings…'}</span>
           </div>
         )}
-        {error && <div className="dashboard-error">{error}</div>}
+        {error && <div className="dashboard-error" role="alert">{error}</div>}
       </div>
 
       <div className="dashboard-chart glass-card">

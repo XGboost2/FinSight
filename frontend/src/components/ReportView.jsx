@@ -4,6 +4,7 @@ import {
   FileBarChart, Loader, RefreshCw, TrendingUp, TrendingDown,
   AlertTriangle, CheckCircle, Shield, Activity,
 } from 'lucide-react'
+import { ReportSkeleton } from './Skeleton'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -66,17 +67,15 @@ export default function ReportView({ ticker, compact = false, ingesting = false,
 
   if (!ticker) return null
 
-  if (ingesting || loading) return (
-    <div className="report-loading glass-card">
-      <Loader size={16} className="spin" />
-      <span>{ingesting ? 'Fetching 10-K filing…' : 'Generating analysis report — first load takes 10-15s…'}</span>
-    </div>
-  )
+  if (ingesting || loading) return <ReportSkeleton />
 
   if (error) return (
-    <div className="report-loading glass-card">
-      <Loader size={16} className="spin" />
-      <span>Preparing report — retrying…</span>
+    <div className="report-error glass-card" role="alert">
+      <AlertTriangle size={14} />
+      <span>{error}</span>
+      <button className="btn-refresh" onClick={() => fetchReport()} style={{ marginLeft: 'auto' }}>
+        <RefreshCw size={12} /> Retry
+      </button>
     </div>
   )
 
