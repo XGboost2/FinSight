@@ -11,11 +11,14 @@ import operator
 from typing import Annotated, TypedDict
 
 from agents.contracts import (
+    BullCase,
+    BearCase,
     FundamentalsOutput,
     NewsOutput,
     ReportOutput,
     RiskOutput,
     SentimentOutput,
+    TechnicalOutput,
 )
 
 
@@ -25,11 +28,16 @@ class AnalysisState(TypedDict):
     filing_id: str
     company_info: dict           # from Redis ticker cache {name, cik, ...}
 
-    # ── Typed node outputs (set by parallel nodes) ────────────────────
+    # ── Typed analyst node outputs (set by parallel nodes) ───────────
     fundamentals: FundamentalsOutput | None
     risk: RiskOutput | None
     sentiment: SentimentOutput | None
     news: NewsOutput | None
+    technical: TechnicalOutput | None
+
+    # ── Typed debate node outputs (set sequentially) ─────────────────
+    bull_case: BullCase | None
+    bear_case: BearCase | None
 
     # ── Final output ──────────────────────────────────────────────────
     report: ReportOutput | None

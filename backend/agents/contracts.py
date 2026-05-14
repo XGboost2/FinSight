@@ -1,11 +1,9 @@
 """
 Agent output contracts — Pydantic models for typed data flow between LangGraph nodes.
 
-Each parallel node validates its output against one of these models before writing
-to state. The synthesize node receives typed objects, not raw dicts.
-
-When CrewAI agents are added, each agent's output must conform to these contracts.
-This makes the interface explicit and catches shape errors at the boundary.
+Each node validates its output against one of these models before writing to state.
+Analyst agents (Fundamentals, Risk) populate chunks + analysis structs.
+Debate agents (Bull, Bear, ReportWriter) consume typed data and produce typed outputs.
 """
 
 from pydantic import BaseModel, Field
@@ -33,15 +31,46 @@ class XBRLFinancials(BaseModel):
     revenue_trend: list[dict] = Field(default_factory=list)
 
 
+class FundamentalsAnalysis(BaseModel):
+    """Agent-synthesised summaries from FundamentalsAnalyst (result_type)."""
+    business_summary: str = ""
+    financial_summary: str = ""
+
+
 class FundamentalsOutput(BaseModel):
     xbrl: XBRLFinancials = Field(default_factory=XBRLFinancials)
     chunks: list[RagChunk] = Field(default_factory=list)
+    analysis: FundamentalsAnalysis = Field(default_factory=FundamentalsAnalysis)
 
 
 # ── node_risk output ───────────────────────────────────────────────────────────
 
+class RiskAssessment(BaseModel):
+    """Agent-generated risk analysis from RiskAnalyst (result_type)."""
+    top_risks: list[str] = Field(default_factory=list)
+    risk_score: float = 0.5
+    risk_rationale: str = ""
+
+
 class RiskOutput(BaseModel):
     chunks: list[RagChunk] = Field(default_factory=list)
+    assessment: RiskAssessment = Field(default_factory=RiskAssessment)
+
+
+# ── Debate agent outputs ───────────────────────────────────────────────────────
+
+class BullCase(BaseModel):
+    """BullResearcher agent output — grounded bull thesis."""
+    points: list[str] = Field(default_factory=list)
+    key_catalyst: str = ""
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class BearCase(BaseModel):
+    """BearResearcher agent output — grounded bear thesis with counter-evidence."""
+    points: list[str] = Field(default_factory=list)
+    key_risk: str = ""
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 # ── node_sentiment output ──────────────────────────────────────────────────────
@@ -77,6 +106,31 @@ class NewsOutput(BaseModel):
     sentiment_counts: dict[str, int] = Field(default_factory=dict)
     summary: str = ""
     events: list[Event8K] = Field(default_factory=list)
+
+
+# ── node_technical output ─────────────────────────────────────────────────────
+
+class TechnicalIndicator(BaseModel):
+    name: str
+    value: str
+    signal: str = "neutral"  # buy | neutral | sell
+    note: str = ""
+
+
+class TechnicalOutput(BaseModel):
+    price: float | None = None
+    rsi: float | None = None
+    macd_hist: float | None = None
+    sma50: float | None = None
+    sma200: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+    volume_ratio: float | None = None
+    overall_signal: str = "Neutral"
+    signal_counts: dict[str, int] = Field(default_factory=dict)
+    indicators: list[TechnicalIndicator] = Field(default_factory=list)
+    verdict: str = ""
+    error: str | None = None
 
 
 # ── node_synthesize output ─────────────────────────────────────────────────────

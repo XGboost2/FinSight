@@ -478,7 +478,7 @@ async def compare_companies(request: Request, body: CompareRequest) -> CompareRe
 # ── Admin ────────────────────────────────────────────────────────────
 
 
-@router.get("/admin/costs")
+@router.get("/admin/costs", dependencies=[Depends(_require_admin)])
 async def get_costs() -> dict:
     """Return LLM API cost breakdown for today, this week, and this month."""
     from datetime import datetime, timezone

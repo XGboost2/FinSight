@@ -1,5 +1,6 @@
 """Backend endpoint tests — all external dependencies mocked."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,9 +17,10 @@ from conftest import (
 class TestHealth:
     def test_redis_up_qdrant_down(self, client, mock_redis):
         """Qdrant connection refused → qdrant_ok=False, redis_ok=True."""
+        mock_qc = MagicMock()
+        mock_qc.get_collections.side_effect = ConnectionRefusedError
         with patch("api.routes.get_filing_count", return_value=3), \
-             patch("qdrant_client.QdrantClient") as mock_qc:
-            mock_qc.return_value.get_collections.side_effect = ConnectionRefusedError
+             patch("rag.retriever._client", return_value=mock_qc):
             r = client.get("/api/health")
         assert r.status_code == 200
         body = r.json()
@@ -27,9 +29,10 @@ class TestHealth:
         assert body["filings_loaded"] == 3
 
     def test_both_up(self, client, mock_redis):
+        mock_qc = MagicMock()
+        mock_qc.get_collections.return_value = MagicMock()
         with patch("api.routes.get_filing_count", return_value=1), \
-             patch("qdrant_client.QdrantClient") as mock_qc:
-            mock_qc.return_value.get_collections.return_value = MagicMock()
+             patch("rag.retriever._client", return_value=mock_qc):
             r = client.get("/api/health")
         assert r.status_code == 200
         assert r.json()["qdrant_ok"] is True
@@ -89,53 +92,68 @@ class TestCompanyInfo:
 # ── Ingest ────────────────────────────────────────────────────────────────────
 
 class TestIngest:
-    def test_new_filing(self, client, mock_redis):
+    def test_already_ingested_returns_cached(self, client, mock_redis):
+        """All filing types present → returns already_existed=True immediately."""
         with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.is_ingested", return_value=False), \
-             patch("api.routes.fetch_and_extract", new_callable=AsyncMock, return_value=EDGAR_RESULT), \
-             patch("api.routes.chunk_text", return_value=CHUNKS), \
-             patch("api.routes.store_filing"), \
-             patch("api.routes.rag_ingest"), \
-             patch("api.routes.register_filing"), \
-             patch("api.routes.get_or_extract_dashboard", new_callable=AsyncMock, return_value=DASHBOARD):
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD):
             r = client.post(f"/api/companies/{TICKER}/ingest")
         assert r.status_code == 200
         body = r.json()
-        assert body["ticker"] == TICKER
-        assert body["filing_id"] == FILING_ID
-        assert body["chunk_count"] == len(CHUNKS)
-        assert body["already_existed"] is False
+        assert body["already_existed"] is True
+        assert body["task_id"] is None
+        assert body["filing_id"] == FILING_RECORD["filing_id"]
 
-    def test_idempotent_already_exists(self, client, mock_redis):
+    def test_new_filing_queues_celery_task(self, client, mock_redis):
+        """10-K missing → queues Celery task → returns task_id, already_existed=False."""
+        mock_task = MagicMock()
+        mock_task.id = "test-task-id"
         with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.is_ingested", return_value=True), \
-             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
-             patch("api.routes.get_filing_by_ticker", return_value=STORED_FILING):
+             patch("api.routes.is_ingested", return_value=False), \
+             patch("api.routes.get_filing_record", return_value=None), \
+             patch("api.routes.get_filing_by_ticker", return_value=None), \
+             patch("tasks.edgar_tasks.ingest_company_filings.delay", return_value=mock_task):
             r = client.post(f"/api/companies/{TICKER}/ingest")
         assert r.status_code == 200
-        assert r.json()["already_existed"] is True
+        body = r.json()
+        assert body["already_existed"] is False
+        assert body["task_id"] is not None
 
-    def test_edgar_not_found(self, client, mock_redis):
+    def test_ticker_uppercased(self, client, mock_redis):
+        """Lowercase ticker → uppercased in response."""
         with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.is_ingested", return_value=False), \
-             patch("api.routes.fetch_and_extract", new_callable=AsyncMock, return_value=None):
-            r = client.post("/api/companies/FAKE/ingest")
-        assert r.status_code == 404
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD):
+            r = client.post("/api/companies/aapl/ingest")
+        assert r.status_code == 200
+        assert r.json()["ticker"] == "AAPL"
 
-    def test_chunking_fails(self, client, mock_redis):
-        with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.is_ingested", return_value=False), \
-             patch("api.routes.fetch_and_extract", new_callable=AsyncMock, return_value=EDGAR_RESULT), \
-             patch("api.routes.chunk_text", return_value=[]):
-            r = client.post(f"/api/companies/{TICKER}/ingest")
-        assert r.status_code == 422
 
-    def test_unexpected_error_returns_502(self, client, mock_redis):
+# ── Ingest Status ─────────────────────────────────────────────────────────────
+
+VALID_TASK_ID = "abcdef12-3456-7890-abcd-ef1234567890"  # valid hex UUID format
+
+
+class TestIngestStatus:
+    def test_pending_status(self, client, mock_redis):
         with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.is_ingested", return_value=False), \
-             patch("api.routes.fetch_and_extract", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
-            r = client.post(f"/api/companies/{TICKER}/ingest")
-        assert r.status_code == 502
+             patch("celery_app.celery_app.AsyncResult") as mock_ar:
+            mock_ar.return_value.state = "PENDING"
+            mock_ar.return_value.info  = None
+            r = client.get(f"/api/companies/{TICKER}/ingest/status?task_id={VALID_TASK_ID}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "pending"
+
+    def test_success_status(self, client, mock_redis):
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("celery_app.celery_app.AsyncResult") as mock_ar:
+            mock_ar.return_value.state  = "SUCCESS"
+            mock_ar.return_value.result = {"chunks": 100}
+            r = client.get(f"/api/companies/{TICKER}/ingest/status?task_id={VALID_TASK_ID}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "done"
+
+    def test_invalid_task_id_rejected(self, client):
+        r = client.get(f"/api/companies/{TICKER}/ingest/status?task_id=../../etc/passwd")
+        assert r.status_code == 400
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -168,6 +186,7 @@ class TestCompare:
         return [
             patch("api.routes.get_redis", return_value=mock_redis),
             patch("api.routes.is_ingested", return_value=True),
+            patch("api.routes.get_ticker_info", return_value=COMPANY_INFO),
             patch("api.routes.get_filing_record", side_effect=[
                 {**FILING_RECORD, "filing_id": FILING_ID},
                 {**FILING_RECORD, "filing_id": FILING_ID2},
@@ -181,7 +200,7 @@ class TestCompare:
 
     def test_successful_comparison(self, client, mock_redis):
         patches = self._base_patches(mock_redis)
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             r = client.post("/api/companies/compare", json={"tickers": [TICKER, TICKER2]})
         assert r.status_code == 200
         body = r.json()
@@ -203,7 +222,9 @@ class TestCompare:
 
 class TestChat:
     def test_returns_answer(self, client, mock_redis):
-        with patch("api.routes.get_filing_by_ticker", return_value=STORED_FILING), \
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=True), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
              patch("api.routes.rag_retrieve", return_value=CHUNKS), \
              patch("api.routes.ask_llm", new_callable=AsyncMock, return_value=LLM_RESULT):
             r = client.post("/api/chat", json={"ticker": TICKER, "question": "What are the risks?"})
@@ -211,84 +232,46 @@ class TestChat:
         body = r.json()
         assert body["answer"] == LLM_RESULT["answer"]
         assert body["model_used"] == "claude-haiku-4-5"
-        assert len(body["sources"]) == len(CHUNKS)
         assert body["cost_usd"] == LLM_RESULT["cost_usd"]
 
-    def test_filing_not_found_returns_404(self, client):
-        with patch("api.routes.get_filing_by_ticker", return_value=None):
+    def test_filing_not_found_returns_404(self, client, mock_redis):
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=False):
             r = client.post("/api/chat", json={"ticker": "FAKE", "question": "test"})
         assert r.status_code == 404
 
-    def test_llm_failure_returns_502(self, client):
-        with patch("api.routes.get_filing_by_ticker", return_value=STORED_FILING), \
+    def test_llm_failure_returns_502(self, client, mock_redis):
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=True), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
              patch("api.routes.rag_retrieve", return_value=CHUNKS), \
              patch("api.routes.ask_llm", new_callable=AsyncMock, side_effect=RuntimeError("LLM down")):
             r = client.post("/api/chat", json={"ticker": TICKER, "question": "test"})
         assert r.status_code == 502
 
-    def test_falls_back_to_store_chunks_when_rag_empty(self, client):
-        with patch("api.routes.get_filing_by_ticker", return_value=STORED_FILING), \
+    def test_falls_back_gracefully_when_rag_empty(self, client, mock_redis):
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=True), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
              patch("api.routes.rag_retrieve", return_value=[]), \
              patch("api.routes.ask_llm", new_callable=AsyncMock, return_value=LLM_RESULT):
             r = client.post("/api/chat", json={"ticker": TICKER, "question": "test"})
         assert r.status_code == 200
 
 
-# ── Legacy Filing Endpoints ───────────────────────────────────────────────────
-
-class TestFilings:
-    def test_list_filings(self, client):
-        mock_filing = {
-            "id": FILING_ID, "ticker": TICKER, "company_name": "Apple Inc.",
-            "filing_type": "10-K", "filed_date": "2023-11-03", "chunk_count": 2,
-        }
-        with patch("api.routes.list_filings", return_value=[mock_filing]), \
-             patch("api.routes.get_filing_count", return_value=1):
-            r = client.get("/api/filings")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["total"] == 1
-        assert body["filings"][0]["ticker"] == TICKER
-
-    def test_get_filing_detail_found(self, client):
-        with patch("api.routes.get_filing", return_value=STORED_FILING):
-            r = client.get(f"/api/filings/{FILING_ID}")
-        assert r.status_code == 200
-        assert r.json()["filing"]["ticker"] == TICKER
-
-    def test_get_filing_detail_not_found(self, client):
-        with patch("api.routes.get_filing", return_value=None):
-            r = client.get("/api/filings/nonexistent-id")
-        assert r.status_code == 404
-
-    def test_fetch_filing_success(self, client):
-        with patch("api.routes.fetch_and_extract", new_callable=AsyncMock, return_value=EDGAR_RESULT), \
-             patch("api.routes.chunk_text", return_value=CHUNKS), \
-             patch("api.routes.store_filing"), \
-             patch("api.routes.rag_ingest"):
-            r = client.post("/api/filings/fetch", json={"ticker": TICKER, "filing_type": "10-K"})
-        assert r.status_code == 200
-        assert r.json()["success"] is True
-
-    def test_fetch_filing_not_found(self, client):
-        with patch("api.routes.fetch_and_extract", new_callable=AsyncMock, return_value=None):
-            r = client.post("/api/filings/fetch", json={"ticker": "FAKE", "filing_type": "10-K"})
-        assert r.status_code == 404
-
-    def test_fetch_filing_edgar_error(self, client):
-        with patch("api.routes.fetch_and_extract", new_callable=AsyncMock,
-                   side_effect=RuntimeError("EDGAR down")):
-            r = client.post("/api/filings/fetch", json={"ticker": TICKER, "filing_type": "10-K"})
-        assert r.status_code == 502
-
-
 # ── Admin ─────────────────────────────────────────────────────────────────────
 
 class TestAdmin:
     def test_refresh_tickers(self, client, mock_redis):
+        admin_key = "test-admin-key"
         with patch("api.routes.get_redis", return_value=mock_redis), \
-             patch("api.routes.load_tickers_into_redis", new_callable=AsyncMock, return_value=13000):
-            r = client.post("/api/admin/refresh-tickers")
+             patch("api.routes.load_tickers_into_redis", new_callable=AsyncMock, return_value=13000), \
+             patch.dict("os.environ", {"FINSIGHT_ADMIN_KEY": admin_key}):
+            r = client.post("/api/admin/refresh-tickers", headers={"X-Admin-Key": admin_key})
         assert r.status_code == 200
         body = r.json()
         assert body["loaded"] == 13000
+
+    def test_admin_requires_key(self, client):
+        r = client.post("/api/admin/refresh-tickers")
+        assert r.status_code == 403

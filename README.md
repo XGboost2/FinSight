@@ -35,12 +35,12 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 ### AI Analysis
 | Feature | Detail |
 |---------|--------|
-| **LangGraph Pipeline** | `StateGraph` fan-out/fan-in: 4 nodes run in parallel (fundamentals, risk, sentiment, news) → synthesis. Typed Pydantic contracts between nodes. `GET /api/companies/{ticker}/analysis`. 24h Redis cache |
-| **Pydantic Agent Contracts** | `FundamentalsOutput`, `RiskOutput`, `SentimentOutput`, `NewsOutput`, `ReportOutput` — validated at every node boundary. Next: Pydantic AI agents slot in replacing raw node functions |
+| **LangGraph Pipeline** | `StateGraph` fan-out/fan-in: 5 nodes run in parallel (fundamentals, risk, sentiment, news, technical) → bull → bear → report. Typed Pydantic contracts at every boundary. `GET /api/companies/{ticker}/analysis`. 24h Redis cache |
+| **Pydantic AI Agents** | `FundamentalsAnalyst` + `RiskAnalyst` (deepseek-chat, typed tool outputs). `BullResearcher` + `BearResearcher` (sequential debate, Bear has live `search_risk_evidence` RAG tool) + `ReportWriter`. `result_type` enforced — validated output or exception, no raw JSON parsing |
 | **Comprehensive Analysis Report** | Full equity research note: findings table (Revenue / Profitability / Risk / Sentiment with signal badges), risk score gauge (0–100), trend narrative, management themes, bull/bear case bullets, verdict |
 | **FinBERT Sentiment** | `ProsusAI/finbert` runs locally on CPU — zero API cost. Scores MD&A (Item 7) chunks: positive / negative / neutral. Aggregates to continuous scalar `(avg_pos - avg_neg + 1) / 2`. Filters boilerplate before inference |
 | **YoY Risk Factor Diff** | Compares Item 1A text between current and prior year 10-K using `difflib` + BGE semantic matching. Classifies paragraphs as new / changed / removed / unchanged. Handles rewording that isn't a real change |
-| **Bull/Bear Debate** | 4-turn LLM debate grounded in filing data. Next: replaced by real Pydantic AI Bull + Bear agents doing multi-turn reasoning with tool access |
+| **Bull/Bear Debate** | Real sequential Pydantic AI agents. Bull reads all analyst outputs → typed `BullCase`. Bear reads BullCase + calls `search_risk_evidence` (live RAG) to retrieve counter-evidence → typed `BearCase`. ReportWriter synthesises both → `ReportOutput` |
 | **Technical Analysis** | yfinance fetches 1-year daily OHLCV. Computes RSI(14), MACD(12,26,9), SMA50, SMA200, Bollinger Bands (20,2), Volume ratio. LLM generates verdict. TradingView Technical Analysis widget alongside |
 | **Company News** | Finnhub API — recent headlines with FinBERT sentiment per article. 1hr Redis cache |
 
@@ -116,10 +116,12 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       │     technical.py             ← yfinance OHLCV → RSI/MACD/SMA/BB/Vol + LLM verdict
       │
       ├── agents/
-      │     contracts.py             ← Pydantic I/O contracts between nodes (FundamentalsOutput, RiskOutput…)
+      │     contracts.py             ← Pydantic I/O contracts (FundamentalsOutput, RiskOutput, TechnicalOutput, BullCase, BearCase, ReportOutput…)
       │     state.py                 ← AnalysisState TypedDict with typed node outputs
-      │     nodes.py                 ← node_fundamentals, node_risk, node_sentiment, node_news, node_synthesize
-      │     graph.py                 ← StateGraph: START → [4 parallel nodes] → synthesize → END
+      │     analyst_agents.py        ← FundamentalsAnalyst + RiskAnalyst (Pydantic AI, deepseek-chat, typed tool outputs)
+      │     debate_agents.py         ← BullResearcher, BearResearcher (search_risk_evidence tool), ReportWriter (Pydantic AI)
+      │     nodes.py                 ← node_fundamentals, node_risk, node_sentiment, node_news, node_technical, node_bull, node_bear, node_report
+      │     graph.py                 ← StateGraph: START → [5 parallel nodes] → bull → bear → report → END
       │
       ├── tasks/
       │     edgar_tasks.py           ← Celery: ingest → embed → classify → pre-gen report
@@ -414,12 +416,10 @@ finsight-ai/
 - [x] **Section-aware retrieval** — query intent routing to 10-K sections (Item 1A for risk, Item 7 for financials, etc.) via Qdrant `item` filter. Reduces irrelevant chunk co-retrieval. Hallucination dropped from 0.20 → 0.14 (-30%)
 - [x] MIT License
 
-- [x] **LangGraph analysis pipeline** — `StateGraph` with fan-out/fan-in parallelism. 4 nodes run simultaneously (fundamentals/XBRL, risk/RAG, FinBERT sentiment, Finnhub news) → synthesis node. Exposed at `GET /api/companies/{ticker}/analysis`. 24h Redis cache
-- [x] **Structured agent protocol** — Pydantic contracts (`contracts.py`) for all inter-node data: `FundamentalsOutput`, `RiskOutput`, `SentimentOutput`, `NewsOutput`, `ReportOutput`. Nodes validate inputs/outputs at boundaries. CrewAI agents must implement these contracts
-
-### Next
-- [ ] **Pydantic AI agents** — 7 typed agents replacing raw node functions: `FundamentalsAnalyst`, `RiskAnalyst`, `SentimentAnalyst`, `NewsAnalyst`, `BullResearcher`, `BearResearcher`, `ReportWriter`. Each agent has `result_type=<Contract>` and tool access to RAG/XBRL/APIs
-- [ ] **Real Bull/Bear debate** — Bull + Bear agents run sequentially, each calling `search_filings` to find counter-evidence. Replaces the current single-LLM-call simulation
+- [x] **LangGraph analysis pipeline** — `StateGraph` with fan-out/fan-in parallelism. 5 nodes run simultaneously (fundamentals/XBRL, risk/RAG, FinBERT sentiment, Finnhub news, technical indicators) → bull → bear → report. Exposed at `GET /api/companies/{ticker}/analysis`. 24h Redis cache
+- [x] **Pydantic AI agents** — `FundamentalsAnalyst` + `RiskAnalyst` (typed tool outputs, deepseek-chat). `BullResearcher` + `BearResearcher` (sequential debate, Bear has live `search_risk_evidence` RAG tool) + `ReportWriter`. `result_type` enforced at every agent boundary
+- [x] **Real Bull/Bear debate** — Bull reads all 5 analyst outputs → typed `BullCase`. Bear reads BullCase + retrieves Item 1A counter-evidence via RAG tool → typed `BearCase`. Replaces old single-LLM-call simulation
+- [x] **TechnicalAnalyst node** — 5th parallel node. RSI, MACD, SMA50/200, Bollinger Bands, volume fed into `DebateDeps`. Bull prompt flags fundamental/technical convergence; Bear prompt surfaces RSI overbought and sell signals
 
 ### Planned
 - [ ] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final LangGraph node
