@@ -32,6 +32,9 @@ langfuse>=3.0.0
 # Rate limiting
 slowapi>=0.1.9
 
+# Pydantic AI — typed agents with tool use and structured outputs
+pydantic-ai>=1.0.0
+
 # JSON repair — fixes malformed LLM JSON output
 json-repair>=0.25.0
 

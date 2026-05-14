@@ -22,6 +22,15 @@ import BullBearTab from './components/tabs/BullBearTab'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const POLL_INTERVAL = 3000   // 3s polling for task status
 const POLL_TIMEOUT  = 300000 // 5 min max wait
+const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
+
+function isValidCompany(obj) {
+  return obj
+    && typeof obj === 'object'
+    && typeof obj.ticker === 'string'
+    && typeof obj.name === 'string'
+    && TICKER_RE.test(obj.ticker.toUpperCase())
+}
 
 async function pollIngestStatus(ticker, taskId, onStep) {
   const start = Date.now()
@@ -107,8 +116,16 @@ export default function App() {
   useEffect(() => {
     const saved = localStorage.getItem('finsight-last-company')
     if (saved) {
-      try { handleSelectPrimary(JSON.parse(saved)) }
-      catch { localStorage.removeItem('finsight-last-company') }
+      try {
+        const parsed = JSON.parse(saved)
+        if (isValidCompany(parsed)) {
+          handleSelectPrimary(parsed)
+        } else {
+          localStorage.removeItem('finsight-last-company')
+        }
+      } catch {
+        localStorage.removeItem('finsight-last-company')
+      }
     }
   }, [])
 

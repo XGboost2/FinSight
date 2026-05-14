@@ -80,7 +80,8 @@ COMPARISON_RESULT = {
 def mock_redis():
     redis = MagicMock()
     redis.ping.return_value = True
-    redis.exists.return_value = True  # ticker cache already loaded
+    redis.exists.return_value = True   # ticker cache already loaded
+    redis.get.return_value = None      # prevent json.loads(MagicMock) in get_filing_record
     return redis
 
 

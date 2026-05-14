@@ -1,14 +1,17 @@
 """
-LangGraph node functions — each validates its output against a Pydantic contract.
+LangGraph node functions — each validated against a Pydantic contract.
 
 Parallel nodes (run simultaneously):
-  node_fundamentals  — XBRL financial data + company overview/revenue RAG
-  node_risk          — Item 1A risk factor RAG
-  node_sentiment     — FinBERT MD&A sentiment scoring
-  node_news          — Finnhub headlines + 8-K events
+  node_fundamentals  — XBRL + adaptive RAG via FundamentalsAnalyst agent
+  node_risk          — Item 1A adaptive RAG via RiskAnalyst agent
+  node_sentiment     — FinBERT MD&A sentiment (deterministic service)
+  node_news          — Finnhub headlines + 8-K events (deterministic service)
+  node_technical     — RSI, MACD, SMA50/200, Bollinger Bands, volume (deterministic service)
 
-Sequential (runs after all parallel nodes complete):
-  node_synthesize    — combines all typed outputs, calls LLM, produces ReportOutput
+Sequential debate nodes (run after parallel nodes complete):
+  node_bull          — BullResearcher agent → typed BullCase
+  node_bear          — BearResearcher agent (with search tool) → typed BearCase
+  node_report        — ReportWriter agent → full ReportOutput
 """
 
 import json
@@ -17,6 +20,8 @@ import time
 from datetime import datetime, timezone
 
 from agents.contracts import (
+    BullCase,
+    BearCase,
     DebateTurn,
     Event8K,
     FindingRow,
@@ -27,6 +32,7 @@ from agents.contracts import (
     ReportOutput,
     RiskOutput,
     SentimentOutput,
+    TechnicalOutput,
     XBRLFinancials,
 )
 from agents.state import AnalysisState
@@ -48,9 +54,9 @@ logger = logging.getLogger(__name__)
 
 @observe()
 async def node_fundamentals(state: AnalysisState) -> dict:
-    ticker = state["ticker"]
+    ticker    = state["ticker"]
     filing_id = state["filing_id"]
-    company_info = state.get("company_info") or {}
+    cik       = (state.get("company_info") or {}).get("cik")
 
     langfuse_context.update_current_observation(
         name=f"node_fundamentals/{ticker}",
@@ -58,48 +64,59 @@ async def node_fundamentals(state: AnalysisState) -> dict:
     )
 
     errors: list[str] = []
+
+    try:
+        from agents.analyst_agents import run_fundamentals_agent
+        analysis, chunks, xbrl = await run_fundamentals_agent(ticker, filing_id, cik)
+        output = FundamentalsOutput(xbrl=xbrl, chunks=chunks, analysis=analysis)
+        logger.info(
+            "[fundamentals] agent done: %d chunks, revenue=%s",
+            len(chunks), xbrl.revenue_latest_year,
+        )
+    except Exception as e:
+        errors.append(f"fundamentals/agent: {e}")
+        logger.warning("[fundamentals] agent failed for %s: %s — falling back", ticker, e)
+        # Fallback: plain service calls (existing behaviour)
+        output = await _fallback_fundamentals(ticker, filing_id, cik, errors)
+
+    langfuse_context.update_current_observation(
+        output={"chunks": len(output.chunks), "xbrl_revenue": output.xbrl.revenue_latest_year},
+    )
+    return {"fundamentals": output, "errors": errors}
+
+
+async def _fallback_fundamentals(
+    ticker: str, filing_id: str, cik: str | None, errors: list[str],
+) -> FundamentalsOutput:
     xbrl = XBRLFinancials()
     chunks: list[RagChunk] = []
-
     try:
         from ingestion.xbrl import get_xbrl_metrics
-        if company_info.get("cik"):
-            raw_xbrl = await get_xbrl_metrics(company_info["cik"])
-            xbrl = XBRLFinancials.model_validate(raw_xbrl)
-            logger.info("[fundamentals] XBRL fetched for %s", ticker)
+        if cik:
+            xbrl = XBRLFinancials.model_validate(await get_xbrl_metrics(cik))
     except Exception as e:
-        errors.append(f"fundamentals/xbrl: {e}")
-        logger.warning("[fundamentals] XBRL failed for %s: %s", ticker, e)
-
+        errors.append(f"fundamentals/xbrl_fallback: {e}")
     try:
         from rag.pipeline import retrieve
-        queries = [
-            "company overview business description products services markets segments",
-            "revenue growth financial performance results of operations earnings",
-        ]
         seen: set = set()
-        for q in queries:
+        for q in [
+            "company overview business description products services",
+            "revenue growth financial performance results of operations",
+        ]:
             for c in retrieve(q, filing_id, top_k=3):
                 if c["chunk_index"] not in seen:
                     seen.add(c["chunk_index"])
                     chunks.append(RagChunk.model_validate(c))
-        logger.info("[fundamentals] %d chunks for %s", len(chunks), ticker)
     except Exception as e:
-        errors.append(f"fundamentals/rag: {e}")
-        logger.warning("[fundamentals] RAG failed for %s: %s", ticker, e)
-
-    output = FundamentalsOutput(xbrl=xbrl, chunks=chunks)
-    langfuse_context.update_current_observation(
-        output={"chunks": len(chunks), "xbrl_revenue": xbrl.revenue_latest_year},
-    )
-    return {"fundamentals": output, "errors": errors}
+        errors.append(f"fundamentals/rag_fallback: {e}")
+    return FundamentalsOutput(xbrl=xbrl, chunks=chunks)
 
 
 # ── node_risk ──────────────────────────────────────────────────────────────────
 
 @observe()
 async def node_risk(state: AnalysisState) -> dict:
-    ticker = state["ticker"]
+    ticker    = state["ticker"]
     filing_id = state["filing_id"]
 
     langfuse_context.update_current_observation(
@@ -108,35 +125,47 @@ async def node_risk(state: AnalysisState) -> dict:
     )
 
     errors: list[str] = []
-    chunks: list[RagChunk] = []
 
     try:
+        from agents.analyst_agents import run_risk_agent
+        assessment, chunks = await run_risk_agent(ticker, filing_id)
+        output = RiskOutput(chunks=chunks, assessment=assessment)
+        logger.info(
+            "[risk] agent done: %d chunks, score=%.2f",
+            len(chunks), assessment.risk_score,
+        )
+    except Exception as e:
+        errors.append(f"risk/agent: {e}")
+        logger.warning("[risk] agent failed for %s: %s — falling back", ticker, e)
+        output = await _fallback_risk(ticker, filing_id, errors)
+
+    langfuse_context.update_current_observation(output={"chunks": len(output.chunks)})
+    return {"risk": output, "errors": errors}
+
+
+async def _fallback_risk(ticker: str, filing_id: str, errors: list[str]) -> RiskOutput:
+    chunks: list[RagChunk] = []
+    try:
         from rag.pipeline import retrieve
-        queries = [
-            "material risk factors regulatory competition supply chain",
-            "cybersecurity risk legal proceedings litigation government regulation",
-        ]
         seen: set = set()
-        for q in queries:
+        for q in [
+            "material risk factors regulatory competition supply chain",
+            "cybersecurity risk legal proceedings litigation regulation",
+        ]:
             for c in retrieve(q, filing_id, top_k=3):
                 if c["chunk_index"] not in seen:
                     seen.add(c["chunk_index"])
                     chunks.append(RagChunk.model_validate(c))
-        logger.info("[risk] %d chunks for %s", len(chunks), ticker)
     except Exception as e:
-        errors.append(f"risk/rag: {e}")
-        logger.warning("[risk] RAG failed for %s: %s", ticker, e)
-
-    output = RiskOutput(chunks=chunks)
-    langfuse_context.update_current_observation(output={"chunks": len(chunks)})
-    return {"risk": output, "errors": errors}
+        errors.append(f"risk/rag_fallback: {e}")
+    return RiskOutput(chunks=chunks)
 
 
 # ── node_sentiment ─────────────────────────────────────────────────────────────
 
 @observe()
 async def node_sentiment(state: AnalysisState) -> dict:
-    ticker = state["ticker"]
+    ticker    = state["ticker"]
     filing_id = state["filing_id"]
 
     langfuse_context.update_current_observation(
@@ -150,8 +179,8 @@ async def node_sentiment(state: AnalysisState) -> dict:
     try:
         from cache.redis_client import get_redis
         from services.sentiment import get_or_score_sentiment
-        redis = get_redis()
-        raw = await get_or_score_sentiment(redis, ticker, filing_id)
+        redis  = get_redis()
+        raw    = await get_or_score_sentiment(redis, ticker, filing_id)
         output = SentimentOutput.model_validate(raw)
         logger.info("[sentiment] score=%.3f label=%s for %s", output.score, output.label, ticker)
     except Exception as e:
@@ -176,19 +205,19 @@ async def node_news(state: AnalysisState) -> dict:
     )
 
     errors: list[str] = []
-    items: list[NewsHeadline] = []
-    events: list[Event8K] = []
-    sentiment_counts: dict = {}
+    items:  list[NewsHeadline] = []
+    events: list[Event8K]      = []
+    sentiment_counts: dict     = {}
     summary = ""
 
     try:
         from cache.redis_client import get_redis
         from ingestion.news import get_or_fetch_news
         redis = get_redis()
-        raw = await get_or_fetch_news(redis, ticker)
+        raw   = await get_or_fetch_news(redis, ticker)
         items = [NewsHeadline.model_validate(h) for h in raw.get("items", [])]
         sentiment_counts = raw.get("sentiment_counts", {})
-        summary = raw.get("summary", "")
+        summary          = raw.get("summary", "")
         logger.info("[news] %d items for %s", len(items), ticker)
     except Exception as e:
         errors.append(f"news: {e}")
@@ -197,11 +226,11 @@ async def node_news(state: AnalysisState) -> dict:
     try:
         from cache.redis_client import get_redis
         redis = get_redis()
-        raw = redis.get(f"finsight:events:8-K:{ticker.upper()}")
+        raw   = redis.get(f"finsight:events:8-K:{ticker.upper()}")
         if raw:
-            for e in json.loads(raw)[-10:]:
+            for ev in json.loads(raw)[-10:]:
                 try:
-                    events.append(Event8K.model_validate(e))
+                    events.append(Event8K.model_validate(ev))
                 except Exception:
                     pass
         logger.info("[news] %d 8-K events for %s", len(events), ticker)
@@ -210,10 +239,8 @@ async def node_news(state: AnalysisState) -> dict:
         logger.warning("[news] events failed for %s: %s", ticker, e)
 
     output = NewsOutput(
-        items=items,
-        sentiment_counts=sentiment_counts,
-        summary=summary,
-        events=events,
+        items=items, sentiment_counts=sentiment_counts,
+        summary=summary, events=events,
     )
     langfuse_context.update_current_observation(
         output={"news_items": len(items), "events": len(events)},
@@ -221,142 +248,262 @@ async def node_news(state: AnalysisState) -> dict:
     return {"news": output, "errors": errors}
 
 
-# ── node_synthesize ────────────────────────────────────────────────────────────
+# ── node_technical ────────────────────────────────────────────────────────────
 
 @observe()
-async def node_synthesize(state: AnalysisState) -> dict:
-    """
-    Combine all typed parallel node outputs and call LLM to produce ReportOutput.
-    Accesses data via Pydantic model attributes — no raw dict key guessing.
-    """
+async def node_technical(state: AnalysisState) -> dict:
     ticker = state["ticker"]
-    company_info = state.get("company_info") or {}
-
-    fundamentals: FundamentalsOutput = state.get("fundamentals") or FundamentalsOutput()
-    risk: RiskOutput = state.get("risk") or RiskOutput()
-    sentiment: SentimentOutput = state.get("sentiment") or SentimentOutput()
-    news: NewsOutput = state.get("news") or NewsOutput()
 
     langfuse_context.update_current_observation(
-        name=f"node_synthesize/{ticker}",
-        input={
-            "ticker": ticker,
-            "fundamentals_chunks": len(fundamentals.chunks),
-            "risk_chunks": len(risk.chunks),
-            "sentiment_score": sentiment.score,
-            "news_items": len(news.items),
-            "events": len(news.events),
-        },
+        name=f"node_technical/{ticker}",
+        input={"ticker": ticker},
     )
 
+    errors: list[str] = []
+    output = TechnicalOutput()
+
+    try:
+        from cache.redis_client import get_redis
+        from services.technical import get_or_fetch_technicals
+        redis = get_redis()
+        raw   = await get_or_fetch_technicals(redis, ticker)
+        if raw.get("error"):
+            errors.append(f"technical: {raw['error']}")
+            logger.warning("[technical] service error for %s: %s", ticker, raw["error"])
+        else:
+            output = TechnicalOutput.model_validate(raw)
+            logger.info(
+                "[technical] %s overall=%s rsi=%.1f",
+                ticker, output.overall_signal, output.rsi or 0,
+            )
+    except Exception as e:
+        errors.append(f"technical: {e}")
+        logger.warning("[technical] failed for %s: %s", ticker, e)
+
+    langfuse_context.update_current_observation(
+        output={"overall_signal": output.overall_signal, "rsi": output.rsi},
+    )
+    return {"technical": output, "errors": errors}
+
+
+# ── node_bull ──────────────────────────────────────────────────────────────────
+
+@observe()
+async def node_bull(state: AnalysisState) -> dict:
+    ticker       = state["ticker"]
+    company_info = state.get("company_info") or {}
+
+    langfuse_context.update_current_observation(
+        name=f"node_bull/{ticker}",
+        input={"ticker": ticker},
+    )
+
+    fundamentals = state.get("fundamentals") or FundamentalsOutput()
+    risk         = state.get("risk")         or RiskOutput()
+    sentiment    = state.get("sentiment")    or SentimentOutput()
+    news         = state.get("news")         or NewsOutput()
+    technical    = state.get("technical")    or TechnicalOutput()
+
+    from agents.debate_agents import DebateDeps, run_bull_agent
+    deps = DebateDeps(
+        ticker=ticker,
+        filing_id=state["filing_id"],
+        company_name=company_info.get("name", ticker),
+        fundamentals=fundamentals,
+        risk=risk,
+        sentiment=sentiment,
+        news=news,
+        technical=technical,
+    )
+
+    bull_case = await run_bull_agent(deps)
+    langfuse_context.update_current_observation(
+        output={"points": len(bull_case.points), "catalyst": bool(bull_case.key_catalyst)},
+    )
+    return {"bull_case": bull_case, "errors": []}
+
+
+# ── node_bear ──────────────────────────────────────────────────────────────────
+
+@observe()
+async def node_bear(state: AnalysisState) -> dict:
+    ticker       = state["ticker"]
+    company_info = state.get("company_info") or {}
+
+    langfuse_context.update_current_observation(
+        name=f"node_bear/{ticker}",
+        input={"ticker": ticker},
+    )
+
+    fundamentals = state.get("fundamentals") or FundamentalsOutput()
+    risk         = state.get("risk")         or RiskOutput()
+    sentiment    = state.get("sentiment")    or SentimentOutput()
+    news         = state.get("news")         or NewsOutput()
+    technical    = state.get("technical")    or TechnicalOutput()
+    bull_case    = state.get("bull_case")    or BullCase()
+
+    from agents.debate_agents import DebateDeps, run_bear_agent
+    deps = DebateDeps(
+        ticker=ticker,
+        filing_id=state["filing_id"],
+        company_name=company_info.get("name", ticker),
+        fundamentals=fundamentals,
+        risk=risk,
+        sentiment=sentiment,
+        news=news,
+        technical=technical,
+        bull_case=bull_case,
+    )
+
+    bear_case = await run_bear_agent(deps)
+    langfuse_context.update_current_observation(
+        output={"points": len(bear_case.points), "key_risk": bool(bear_case.key_risk)},
+    )
+    return {"bear_case": bear_case, "errors": []}
+
+
+# ── node_report ────────────────────────────────────────────────────────────────
+
+@observe()
+async def node_report(state: AnalysisState) -> dict:
+    """
+    ReportWriter agent synthesises all typed outputs → ReportOutput.
+    Falls back to the original single-LLM approach if the agent fails.
+    """
+    ticker       = state["ticker"]
+    company_info = state.get("company_info") or {}
+
+    langfuse_context.update_current_observation(
+        name=f"node_report/{ticker}",
+        input={"ticker": ticker},
+    )
+
+    start        = time.perf_counter()
+    fundamentals = state.get("fundamentals") or FundamentalsOutput()
+    risk         = state.get("risk")         or RiskOutput()
+    sentiment    = state.get("sentiment")    or SentimentOutput()
+    news         = state.get("news")         or NewsOutput()
+    technical    = state.get("technical")    or TechnicalOutput()
+    bull_case    = state.get("bull_case")    or BullCase()
+    bear_case    = state.get("bear_case")    or BearCase()
+
+    from agents.debate_agents import DebateDeps, build_debate_transcript, run_report_agent
+    deps = DebateDeps(
+        ticker=ticker,
+        filing_id=state["filing_id"],
+        company_name=company_info.get("name", ticker),
+        fundamentals=fundamentals,
+        risk=risk,
+        sentiment=sentiment,
+        news=news,
+        technical=technical,
+        bull_case=bull_case,
+        bear_case=bear_case,
+    )
+
+    try:
+        report = await run_report_agent(deps)
+
+        # Post-process: fill system-set fields and merge debate transcript
+        debate_turns = build_debate_transcript(bull_case, bear_case)
+        report = report.model_copy(update={
+            "ticker":             ticker.upper(),
+            "company_name":       company_info.get("name", ticker),
+            "bull_case":          bull_case.points,
+            "bear_case":          bear_case.points,
+            "debate_transcript":  debate_turns,
+            "financial_data":     fundamentals.xbrl.model_dump(),
+            "generated_at":       datetime.now(timezone.utc).isoformat(),
+            "pipeline":           "pydantic-ai",
+        })
+
+        logger.info(
+            "[report] agent done: %s latency=%.0fms",
+            ticker, (time.perf_counter() - start) * 1000,
+        )
+        langfuse_context.update_current_observation(
+            output={"verdict": bool(report.verdict), "pipeline": "pydantic-ai"},
+        )
+        return {"report": report, "errors": []}
+
+    except Exception as e:
+        logger.warning("[report] agent failed for %s: %s — falling back to LLM", ticker, e)
+        return await _fallback_report(state, deps, start)
+
+
+@observe()
+async def _fallback_report(state: AnalysisState, deps: "DebateDeps", start: float) -> dict:
+    """Single-LLM fallback if ReportWriter agent fails."""
     from services.llm import call_llm_raw, _calc_cost
+    from agents.debate_agents import build_debate_transcript
+
+    ticker       = deps.ticker
+    company_info = state.get("company_info") or {}
+    fundamentals = deps.fundamentals
+    risk         = deps.risk
+    sentiment    = deps.sentiment
+    news         = deps.news
+    bull_case    = deps.bull_case or BullCase()
+    bear_case    = deps.bear_case or BearCase()
 
     xbrl = fundamentals.xbrl
-
-    # Build structured context blocks — typed access, not dict.get()
-    fundamentals_text = "\n\n---\n\n".join(
-        f"[{c.item or 'Section'} Chunk {c.chunk_index}]\n{c.text}"
-        for c in fundamentals.chunks
-    )[:8000]
-
-    risk_text = "\n\n---\n\n".join(
-        f"[{c.item or 'Section'} Chunk {c.chunk_index}]\n{c.text}"
-        for c in risk.chunks
-    )[:6000]
-
     xbrl_block = ""
     if xbrl.revenue_latest_year:
-        xbrl_block = f"""CONFIRMED XBRL FINANCIAL DATA (use these exact numbers):
-  Revenue (latest year): {xbrl.revenue_latest_year}
-  YoY Change:            {xbrl.revenue_yoy_change}
-  Net Income:            {xbrl.net_income_latest_year}
-  Gross Margin:          {xbrl.gross_margin_pct}"""
-
-    sentiment_block = (
-        f"FINBERT SENTIMENT (MD&A): score={sentiment.score:.2f} ({sentiment.label}) | "
-        f"pos={sentiment.pos_pct:.0%} neg={sentiment.neg_pct:.0%} neu={sentiment.neu_pct:.0%}"
-    )
-
-    news_block = ""
-    if news.items:
-        news_block = "RECENT NEWS:\n" + "\n".join(
-            f"  [{h.sentiment.upper()}] {h.headline[:120]}"
-            for h in news.items[:5]
+        xbrl_block = (
+            f"XBRL: Revenue={xbrl.revenue_latest_year} (YoY: {xbrl.revenue_yoy_change}) "
+            f"NetIncome={xbrl.net_income_latest_year} GrossMargin={xbrl.gross_margin_pct}"
         )
 
-    events_block = ""
-    if news.events:
-        events_block = "RECENT 8-K EVENTS:\n" + "\n".join(
-            f"  {e.date} [{e.event_type.upper()}]: {e.summary[:150]}"
-            for e in reversed(news.events)
-        )
+    fund_text  = "\n\n---\n\n".join(f"[{c.item}] {c.text}" for c in fundamentals.chunks)[:6000]
+    risk_text  = "\n\n---\n\n".join(f"[{c.item}] {c.text}" for c in risk.chunks)[:4000]
+    bull_block = "\n".join(f"- {p}" for p in bull_case.points)
+    bear_block = "\n".join(f"- {p}" for p in bear_case.points)
 
-    prompt = f"""You are a senior equity research analyst. Generate a comprehensive fundamental analysis report for {ticker} ({company_info.get('name', ticker)}).
+    prompt = f"""You are a senior equity analyst. Write a comprehensive report for {ticker} ({company_info.get('name', ticker)}).
 
 {xbrl_block}
+SENTIMENT: {sentiment.score:.2f} ({sentiment.label})
+BULL CASE: {bull_block}
+BEAR CASE: {bear_block}
 
-{sentiment_block}
+FILING CONTEXT:
+{fund_text}
 
-{news_block}
-
-{events_block}
-
-BUSINESS OVERVIEW & FINANCIAL PERFORMANCE:
-{fundamentals_text}
-
-RISK FACTORS (Item 1A):
+RISK FACTORS:
 {risk_text}
 
-Return ONLY valid JSON with exactly this structure:
-
+Return only valid JSON matching this schema:
 {{
-  "company_overview": "2-3 sentences: what the company does, key products/services, markets",
-  "trend_narrative": "2-3 sentences: financial trajectory, revenue trend, margin movement",
+  "company_overview": "2-3 sentences",
+  "trend_narrative": "2-3 sentences on financial trajectory",
   "findings_table": [
-    {{"category": "Revenue",       "metric": "Total Revenue",   "value": "use exact XBRL", "yoy": "+6.7%",  "signal": "positive", "interpretation": "one grounded sentence"}},
-    {{"category": "Profitability", "metric": "Net Income",      "value": "exact value",    "yoy": "or null","signal": "positive", "interpretation": "one sentence"}},
-    {{"category": "Profitability", "metric": "Gross Margin",    "value": "exact value",    "yoy": "or null","signal": "positive", "interpretation": "one sentence"}},
-    {{"category": "Risk",          "metric": "Primary Risk",    "value": "risk category",  "yoy": null,     "signal": "negative", "interpretation": "one sentence"}},
-    {{"category": "Sentiment",     "metric": "Management Tone", "value": "{sentiment.label}","yoy": null,   "signal": "neutral",  "interpretation": "one sentence"}}
+    {{"category":"Revenue","metric":"Total Revenue","value":"use XBRL","yoy":"+6.7%","signal":"positive","interpretation":"one sentence"}},
+    {{"category":"Profitability","metric":"Net Income","value":"exact","yoy":null,"signal":"positive","interpretation":"one sentence"}},
+    {{"category":"Profitability","metric":"Gross Margin","value":"exact","yoy":null,"signal":"positive","interpretation":"one sentence"}},
+    {{"category":"Risk","metric":"Primary Risk","value":"category","yoy":null,"signal":"negative","interpretation":"one sentence"}},
+    {{"category":"Sentiment","metric":"Management Tone","value":"{sentiment.label}","yoy":null,"signal":"neutral","interpretation":"one sentence"}}
   ],
   "risk_score": 0.35,
-  "risk_factors": ["specific risk 1 with evidence", "specific risk 2", "specific risk 3"],
+  "risk_factors": ["risk 1", "risk 2", "risk 3"],
   "sentiment_score": {sentiment.score},
   "sentiment_label": "{sentiment.label}",
-  "management_themes": "2 sentences on management focus and strategic priorities",
-  "bull_case": ["bull point 1 with filing evidence", "bull point 2", "bull point 3"],
-  "bear_case": ["bear point 1 with evidence", "bear point 2", "bear point 3"],
-  "verdict": "2-3 sentence balanced conclusion with risk level and investment thesis"
-}}
+  "management_themes": "2 sentences",
+  "verdict": "2-3 sentence balanced conclusion"
+}}"""
 
-Signal values: exactly one of positive, caution, negative, neutral.
-risk_score: 0.0=very low, 0.5=moderate, 1.0=very high.
-Return only the JSON. No markdown fences."""
-
-    start = time.perf_counter()
     last_error: Exception | None = None
-
     for attempt in range(1, 4):
         try:
             raw, tok_in, tok_out, model_used = await call_llm_raw(prompt, max_tokens=2500)
-            raw = raw.strip()
-            if raw.startswith("```"):
-                parts = raw.split("```")
-                raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
-
+            raw = raw.strip().lstrip("```json").rstrip("```").strip()
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
                 from json_repair import repair_json
-                logger.warning("[synthesize] JSON repair for %s attempt=%d", ticker, attempt)
                 data = json.loads(repair_json(raw))
 
-            # Validate findings_table rows
             findings = [FindingRow.model_validate(r) for r in data.get("findings_table", [])]
-            # Validate debate
-            debate = await _generate_debate(ticker, data.get("bull_case", []), data.get("bear_case", []))
-
-            output = ReportOutput(
+            report   = ReportOutput(
                 ticker=ticker.upper(),
                 company_name=company_info.get("name", ticker),
                 company_overview=data.get("company_overview", ""),
@@ -367,70 +514,26 @@ Return only the JSON. No markdown fences."""
                 sentiment_score=float(data.get("sentiment_score", sentiment.score)),
                 sentiment_label=data.get("sentiment_label", sentiment.label),
                 management_themes=data.get("management_themes", ""),
-                bull_case=data.get("bull_case", []),
-                bear_case=data.get("bear_case", []),
+                bull_case=bull_case.points,
+                bear_case=bear_case.points,
                 verdict=data.get("verdict", ""),
-                debate_transcript=debate,
+                debate_transcript=build_debate_transcript(bull_case, bear_case),
                 financial_data=xbrl.model_dump(),
                 generated_at=datetime.now(timezone.utc).isoformat(),
+                pipeline="langgraph-fallback",
             )
-
             cost = _calc_cost(model_used, tok_in, tok_out)
-            logger.info(
-                "[synthesize] done: %s attempt=%d model=%s cost=$%.4f latency=%.0fms",
-                ticker, attempt, model_used, cost, (time.perf_counter() - start) * 1000,
-            )
-            langfuse_context.update_current_observation(
-                output={"verdict": bool(output.verdict), "model": model_used},
-                metadata={"cost_usd": cost, "tokens_in": tok_in, "tokens_out": tok_out},
-            )
-            return {"report": output, "errors": []}
-
+            logger.info("[report] fallback done: %s attempt=%d model=%s cost=$%.4f latency=%.0fms",
+                        ticker, attempt, model_used, cost,
+                        (time.perf_counter() - start) * 1000)
+            return {"report": report, "errors": []}
         except Exception as e:
             last_error = e
-            logger.warning("[synthesize] attempt %d failed for %s: %s", attempt, ticker, e)
+            logger.warning("[report] fallback attempt %d failed: %s", attempt, e)
 
-    error_msg = f"synthesize: {last_error}"
-    logger.error("[synthesize] all attempts failed for %s: %s", ticker, last_error)
-    return {
-        "report": ReportOutput(
-            ticker=ticker.upper(),
-            company_name=company_info.get("name", ticker),
-            error=str(last_error),
-        ),
-        "errors": [error_msg],
-    }
-
-
-@observe()
-async def _generate_debate(ticker: str, bull_case: list, bear_case: list) -> list[DebateTurn]:
-    """4-turn bull/bear debate. Returns validated DebateTurn list."""
-    if not bull_case or not bear_case:
-        return []
-
-    from services.llm import call_llm_raw
-
-    bull_block = "\n".join(f"- {p}" for p in bull_case)
-    bear_block = "\n".join(f"- {p}" for p in bear_case)
-
-    prompt = f"""Simulate a 4-turn investment debate for {ticker}.
-Bull case: {bull_block}
-Bear case: {bear_block}
-
-Return ONLY a JSON array:
-[
-  {{"role": "Bull", "argument": "Opening on strongest bull point. 2-3 sentences."}},
-  {{"role": "Bear", "argument": "Direct counter with specific risk. 2-3 sentences."}},
-  {{"role": "Bull", "argument": "Rebuttal with mitigating evidence. 2-3 sentences."}},
-  {{"role": "Bear", "argument": "Closing — unresolved risk. 2-3 sentences."}}
-]"""
-
-    try:
-        raw, _, _, _ = await call_llm_raw(prompt, max_tokens=600)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1].lstrip("json").strip()
-        turns = json.loads(raw.strip())
-        return [DebateTurn.model_validate(t) for t in turns if isinstance(t, dict)]
-    except Exception as e:
-        logger.warning("[debate] failed for %s: %s", ticker, e)
-        return []
+    error_report = ReportOutput(
+        ticker=ticker.upper(),
+        company_name=company_info.get("name", ticker),
+        error=str(last_error),
+    )
+    return {"report": error_report, "errors": [f"report_fallback: {last_error}"]}

@@ -3,7 +3,8 @@
 All structured data flows through these models. Never use raw dicts.
 """
 
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -30,7 +31,7 @@ class FilingInfo(BaseModel):
     filed_date: str = ""
     chunk_count: int
     status: str = "ready"
-    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class FilingResponse(BaseModel):

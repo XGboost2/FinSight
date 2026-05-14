@@ -5,8 +5,11 @@ All endpoints return Pydantic models. Never raw dicts.
 
 import json
 import logging
+import os
+import re
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.security import APIKeyHeader
 from limiter import limiter
 
 from config import get_settings
@@ -66,6 +69,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["FinSight"])
 
+_TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+
+
+def _validate_ticker(ticker: str) -> str:
+    t = ticker.strip().upper()
+    if not _TICKER_RE.match(t):
+        raise HTTPException(400, "Invalid ticker format")
+    return t
+
+
+_admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+
+async def _require_admin(key: str = Depends(_admin_key_header)):
+    expected = os.environ.get("FINSIGHT_ADMIN_KEY", "")
+    if not expected or key != expected:
+        raise HTTPException(403, "Admin access denied")
+    return key
+
 
 # ── Company Search (pure Redis — zero SEC API calls) ─────────────────
 
@@ -86,6 +108,7 @@ async def search_companies(request: Request, q: str = Query(..., min_length=1)) 
 
 @router.get("/companies/{ticker}/info", response_model=CompanyInfo)
 async def get_company_info(ticker: str) -> CompanyInfo:
+    ticker = _validate_ticker(ticker)
     logger.info("Company info request: %s", ticker)
     redis = get_redis()
     info = get_ticker_info(redis, ticker)
@@ -110,7 +133,7 @@ async def ingest_company(request: Request, ticker: str, force: bool = False):
     from tasks.edgar_tasks import ingest_company_filings
     from celery.result import AsyncResult
 
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     redis = get_redis()
 
     ALL_TYPES = ("10-K", "10-Q", "8-K")
@@ -168,7 +191,9 @@ async def ingest_company(request: Request, ticker: str, force: bool = False):
 async def ingest_status(ticker: str, task_id: str):
     """Poll Celery task status for an ongoing ingest."""
     from celery_app import celery_app as _celery
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
+    if not re.match(r"^[a-f0-9\-]{8,50}$", task_id):
+        raise HTTPException(400, "Invalid task_id format")
 
     try:
         result = _celery.AsyncResult(task_id)
@@ -192,7 +217,7 @@ async def ingest_status(ticker: str, task_id: str):
 async def company_events(ticker: str):
     """Return classified 8-K events for a ticker from Redis."""
     import json as _json
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     redis = get_redis()
     raw = redis.get(f"finsight:events:8-K:{ticker}")
     events = _json.loads(raw) if raw else []
@@ -206,7 +231,7 @@ async def company_events(ticker: str):
 @limiter.limit("30/minute")
 async def get_dashboard(request: Request, ticker: str) -> DashboardResponse:
     """Return cached dashboard metrics. Triggers extraction if cache expired."""
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("Dashboard request: %s", ticker)
     redis = get_redis()
 
@@ -237,7 +262,7 @@ async def get_analysis(request: Request, ticker: str, refresh: bool = False) -> 
     from agents.graph import run_analysis
     import json as _json
 
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("LangGraph analysis request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
 
@@ -259,7 +284,7 @@ async def get_analysis(request: Request, ticker: str, refresh: bool = False) -> 
         final_state = await run_analysis(ticker, record["filing_id"], company_info)
     except Exception as e:
         logger.error("LangGraph pipeline failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Analysis pipeline failed: {e}")
+        raise HTTPException(502, "Analysis pipeline failed")
 
     report = final_state.get("report", {})
     if not report.get("verdict"):
@@ -278,7 +303,7 @@ async def get_analysis(request: Request, ticker: str, refresh: bool = False) -> 
 @limiter.limit("10/minute")
 async def get_report(request: Request, ticker: str, refresh: bool = False) -> AnalysisReport:
     """Generate comprehensive 10-K analysis report: findings table, bull/bear cases, verdict."""
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("Report request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
 
@@ -294,7 +319,7 @@ async def get_report(request: Request, ticker: str, refresh: bool = False) -> An
         report = await get_or_generate_report(redis, ticker, record["filing_id"], fallback, refresh=refresh)
     except Exception as e:
         logger.error("Report failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Report generation failed: {e}")
+        raise HTTPException(502, "Report generation failed")
 
     logger.info("Report served: %s", ticker)
     return AnalysisReport(**report)
@@ -312,7 +337,7 @@ async def get_yoy_diff(request: Request, ticker: str, refresh: bool = False) -> 
     and summarises changes with LLM. Results cached 30 days in Redis.
     Use ?refresh=true to force recompute.
     """
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("YoY diff request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
 
@@ -325,7 +350,7 @@ async def get_yoy_diff(request: Request, ticker: str, refresh: bool = False) -> 
         raise HTTPException(404, str(e))
     except Exception as e:
         logger.error("Diff failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Diff failed: {e}")
+        raise HTTPException(502, "Diff computation failed")
 
     def _to_section(d: dict) -> SectionDiff:
         if not d:
@@ -351,7 +376,7 @@ async def get_yoy_diff(request: Request, ticker: str, refresh: bool = False) -> 
 @limiter.limit("20/minute")
 async def get_news(request: Request, ticker: str, refresh: bool = False) -> NewsResponse:
     """Fetch recent company news via Finnhub, scored with FinBERT. 1hr Redis cache."""
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("News request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
 
@@ -359,7 +384,7 @@ async def get_news(request: Request, ticker: str, refresh: bool = False) -> News
         result = await get_or_fetch_news(redis, ticker, refresh=refresh)
     except Exception as e:
         logger.error("News fetch failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"News fetch failed: {e}")
+        raise HTTPException(502, "News fetch failed")
 
     logger.info("News served: %s — %d items", ticker, len(result.get("items", [])))
     return NewsResponse(**result)
@@ -374,7 +399,7 @@ async def get_sentiment(request: Request, ticker: str, refresh: bool = False) ->
     """FinBERT sentiment scoring on MD&A (Item 7). 30-day Redis cache.
     Use ?refresh=true to force rescore.
     """
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("Sentiment request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
 
@@ -387,7 +412,7 @@ async def get_sentiment(request: Request, ticker: str, refresh: bool = False) ->
         result = await get_or_score_sentiment(redis, ticker, record["filing_id"], refresh=refresh)
     except Exception as e:
         logger.error("Sentiment failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Sentiment scoring failed: {e}")
+        raise HTTPException(502, "Sentiment scoring failed")
 
     logger.info("Sentiment served: %s score=%.3f", ticker, result.get("score", 0))
     return SentimentResult(**result)
@@ -400,14 +425,14 @@ async def get_sentiment(request: Request, ticker: str, refresh: bool = False) ->
 @limiter.limit("20/minute")
 async def get_technicals(request: Request, ticker: str, refresh: bool = False):
     """RSI, MACD, SMA50/200, Bollinger Bands, Volume + LLM verdict. 1h Redis cache."""
-    ticker = ticker.upper()
+    ticker = _validate_ticker(ticker)
     logger.info("Technicals request: %s refresh=%s", ticker, refresh)
     redis = get_redis()
     try:
         result = await get_or_fetch_technicals(redis, ticker, refresh=refresh)
     except Exception as e:
         logger.error("Technicals failed for %s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, f"Technical analysis failed: {e}")
+        raise HTTPException(502, "Technical analysis failed")
     logger.info("Technicals served: %s overall=%s", ticker, result.get("overall_signal", "?"))
     return result
 
@@ -453,7 +478,7 @@ async def compare_companies(request: Request, body: CompareRequest) -> CompareRe
 # ── Admin ────────────────────────────────────────────────────────────
 
 
-@router.get("/admin/costs")
+@router.get("/admin/costs", dependencies=[Depends(_require_admin)])
 async def get_costs() -> dict:
     """Return LLM API cost breakdown for today, this week, and this month."""
     from datetime import datetime, timezone
@@ -471,7 +496,7 @@ async def get_costs() -> dict:
     }
 
 
-@router.post("/admin/refresh-tickers")
+@router.post("/admin/refresh-tickers", dependencies=[Depends(_require_admin)])
 async def refresh_tickers() -> dict:
     """Manually trigger ticker cache refresh (normally runs at 2am UTC)."""
     logger.info("Manual ticker refresh triggered")
@@ -492,7 +517,7 @@ async def fetch_filing(request: FetchFilingRequest) -> FilingResponse:
         result = await fetch_and_extract(request.ticker, request.filing_type)
     except Exception as e:
         logger.error("EDGAR fetch failed for %s: %s", request.ticker, e, exc_info=True)
-        raise HTTPException(502, f"SEC EDGAR fetch failed: {e}")
+        raise HTTPException(502, "SEC EDGAR fetch failed")
 
     if not result:
         logger.warning("No %s found for %s", request.filing_type, request.ticker)
@@ -546,6 +571,8 @@ async def get_filings() -> FilingListResponse:
 
 @router.get("/filings/{filing_id}")
 async def get_filing_detail(filing_id: str) -> FilingResponse:
+    if not re.match(r"^[a-zA-Z0-9_\-]{1,100}$", filing_id):
+        raise HTTPException(400, "Invalid filing_id format")
     logger.info("Filing detail request: %s", filing_id)
     data = get_filing(filing_id)
     if not data:
@@ -567,14 +594,16 @@ async def get_filing_detail(filing_id: str) -> FilingResponse:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    logger.info("Chat request: ticker=%s question=%r", request.ticker, request.question[:80])
+@limiter.limit("20/minute")
+async def chat(request: Request, request_body: ChatRequest) -> ChatResponse:
+    logger.info("Chat request: ticker=%s question=%r", request_body.ticker, request_body.question[:80])
+    ticker = _validate_ticker(request_body.ticker)
     redis = get_redis()
-    if not is_ingested(redis, request.ticker):
-        logger.warning("Chat: no filing for %s", request.ticker)
-        raise HTTPException(404, f"No filing for '{request.ticker}'. Ingest first.")
+    if not is_ingested(redis, ticker):
+        logger.warning("Chat: no filing for %s", ticker)
+        raise HTTPException(404, f"No filing for '{ticker}'. Ingest first.")
 
-    record = get_filing_record(redis, request.ticker)
+    record = get_filing_record(redis, ticker)
     filing_id = record["filing_id"]
 
     # Multi-query retrieval — original question + section-targeted rephrasing
@@ -588,12 +617,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
         "expect":  "management discussion analysis outlook expectations guidance",
     }
     extra_query = next(
-        (v for k, v in section_queries.items() if k in request.question.lower()), None
+        (v for k, v in section_queries.items() if k in request_body.question.lower()), None
     )
 
     seen: set = set()
     relevant_chunks = []
-    for q in ([request.question] + ([extra_query] if extra_query else [])):
+    for q in ([request_body.question] + ([extra_query] if extra_query else [])):
         for c in rag_retrieve(q, filing_id, top_k=5):
             if c["chunk_index"] not in seen:
                 seen.add(c["chunk_index"])
@@ -604,14 +633,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
     try:
-        llm_result = await ask_llm(request.question, context, model=request.model, ticker=request.ticker)
+        llm_result = await ask_llm(request_body.question, context, model=request_body.model, ticker=ticker)
     except Exception as e:
-        logger.error("LLM call failed for ticker=%s: %s", request.ticker, e, exc_info=True)
-        raise HTTPException(502, f"LLM call failed: {e}")
+        logger.error("LLM call failed for ticker=%s: %s", ticker, e, exc_info=True)
+        raise HTTPException(502, "LLM call failed")
 
     logger.info(
         "Chat complete: ticker=%s model=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
-        request.ticker,
+        ticker,
         llm_result["model_used"],
         llm_result["tokens_in"],
         llm_result["tokens_out"],
@@ -633,7 +662,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         cost_usd=llm_result["cost_usd"],
         latency_ms=llm_result["latency_ms"],
         trace_id=llm_result.get("trace_id"),
-        contexts=[c["text"] for c in relevant_chunks] if request.include_context else None,
+        contexts=[c["text"] for c in relevant_chunks] if request_body.include_context else None,
     )
 
 
@@ -658,7 +687,7 @@ async def submit_feedback(body: FeedbackRequest) -> dict:
         logger.info("Feedback scored: trace_id=%s helpful=%s", body.trace_id, body.helpful)
     except Exception as e:
         logger.warning("Langfuse score failed: %s", e)
-        raise HTTPException(502, f"Failed to record feedback: {e}")
+        raise HTTPException(502, "Failed to record feedback")
 
     return {"ok": True, "scored": True}
 
@@ -676,8 +705,8 @@ async def health() -> HealthResponse:
         logger.warning("Health check: Redis unavailable — %s", e)
 
     try:
-        from qdrant_client import QdrantClient
-        qc = QdrantClient(url=get_settings().QDRANT_URL)
+        from rag.retriever import _client as get_qdrant
+        qc = get_qdrant()
         qc.get_collections()
         qdrant_ok = True
     except Exception as e:

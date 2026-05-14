@@ -25,8 +25,14 @@ def _rsi(close, period: int = 14) -> float:
     delta = close.diff().dropna()
     gain  = delta.clip(lower=0).rolling(period).mean()
     loss  = (-delta.clip(upper=0)).rolling(period).mean()
-    rs    = gain / loss
-    return round((100 - (100 / (1 + rs))).iloc[-1], 2)
+    last_loss = loss.iloc[-1]
+    last_gain = gain.iloc[-1]
+    if last_loss == 0:
+        return 100.0
+    if last_gain == 0:
+        return 0.0
+    rs = last_gain / last_loss
+    return round(100 - (100 / (1 + rs)), 2)
 
 
 def _macd(close) -> tuple[float, float, float]:
