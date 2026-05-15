@@ -22,6 +22,10 @@ Topology:
                         │  node_report │  ← ReportWriter agent
                         └──────────────┘
                                 ▼
+                        ┌──────────────┐
+                        │  portfolio   │  ← PortfolioSignal agent (BUY/HOLD/SELL)
+                        └──────────────┘
+                                ▼
                               END
 
 Analyst nodes run in parallel. Bull → Bear → Report run sequentially so each
@@ -45,6 +49,7 @@ from agents.nodes import (
     node_bull,
     node_bear,
     node_report,
+    node_portfolio,
 )
 from agents.state import AnalysisState
 
@@ -67,9 +72,10 @@ def _build() -> Any:
     g.add_node("technical",    node_technical)
 
     # Debate nodes (sequential)
-    g.add_node("bull",   node_bull)
-    g.add_node("bear",   node_bear)
-    g.add_node("report", node_report)
+    g.add_node("bull",      node_bull)
+    g.add_node("bear",      node_bear)
+    g.add_node("report",    node_report)
+    g.add_node("portfolio", node_portfolio)
 
     # Fan-out: START → all 5 analyst nodes simultaneously
     g.add_edge(START, "fundamentals")
@@ -85,10 +91,11 @@ def _build() -> Any:
     g.add_edge("news",         "bull")
     g.add_edge("technical",    "bull")
 
-    # Sequential debate chain
-    g.add_edge("bull",   "bear")
-    g.add_edge("bear",   "report")
-    g.add_edge("report", END)
+    # Sequential debate chain → portfolio signal
+    g.add_edge("bull",      "bear")
+    g.add_edge("bear",      "report")
+    g.add_edge("report",    "portfolio")
+    g.add_edge("portfolio", END)
 
     return g.compile()
 
@@ -122,10 +129,11 @@ async def run_analysis(ticker: str, filing_id: str, company_info: dict) -> dict:
         "sentiment":    None,
         "news":         None,
         "technical":    None,
-        "bull_case":    None,
-        "bear_case":    None,
-        "report":       None,
-        "errors":       [],
+        "bull_case":         None,
+        "bear_case":         None,
+        "report":            None,
+        "portfolio_signal":  None,
+        "errors":            [],
     }
 
     logger.info("LangGraph pipeline starting: ticker=%s filing_id=%s", ticker, filing_id)
@@ -138,9 +146,16 @@ async def run_analysis(ticker: str, filing_id: str, company_info: dict) -> dict:
         )
 
     # Serialize Pydantic contracts to plain dicts for JSON-safe return
+    final_state = dict(final_state)
     report = final_state.get("report")
     if report is not None and hasattr(report, "model_dump"):
-        final_state = dict(final_state)
         final_state["report"] = report.model_dump()
+
+    ps = final_state.get("portfolio_signal")
+    if ps is not None and hasattr(ps, "model_dump"):
+        ps_dict = ps.model_dump()
+        final_state["portfolio_signal"] = ps_dict
+        if isinstance(final_state["report"], dict):
+            final_state["report"]["portfolio_signal"] = ps_dict
 
     return final_state

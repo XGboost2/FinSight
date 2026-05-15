@@ -15,6 +15,7 @@ from agents.contracts import (
     BearCase,
     FundamentalsOutput,
     NewsOutput,
+    PortfolioSignal,
     ReportOutput,
     RiskOutput,
     SentimentOutput,
@@ -41,6 +42,7 @@ class AnalysisState(TypedDict):
 
     # ── Final output ──────────────────────────────────────────────────
     report: ReportOutput | None
+    portfolio_signal: PortfolioSignal | None
 
     # ── Error accumulator (append-only, merged across parallel nodes) ─
     errors: Annotated[list[str], operator.add]

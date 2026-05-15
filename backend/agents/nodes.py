@@ -28,6 +28,7 @@ from agents.contracts import (
     FundamentalsOutput,
     NewsHeadline,
     NewsOutput,
+    PortfolioSignal,
     RagChunk,
     ReportOutput,
     RiskOutput,
@@ -406,11 +407,21 @@ async def node_report(state: AnalysisState) -> dict:
 
         # Post-process: fill system-set fields and merge debate transcript
         debate_turns = build_debate_transcript(bull_case, bear_case)
+        if bull_case.confidence > bear_case.confidence:
+            winner = "Bull"
+        elif bear_case.confidence > bull_case.confidence:
+            winner = "Bear"
+        else:
+            winner = "Draw"
+
         report = report.model_copy(update={
             "ticker":             ticker.upper(),
             "company_name":       company_info.get("name", ticker),
             "bull_case":          bull_case.points,
             "bear_case":          bear_case.points,
+            "bull_confidence":    bull_case.confidence,
+            "bear_confidence":    bear_case.confidence,
+            "debate_winner":      winner,
             "debate_transcript":  debate_turns,
             "financial_data":     fundamentals.xbrl.model_dump(),
             "generated_at":       datetime.now(timezone.utc).isoformat(),
@@ -516,6 +527,9 @@ Return only valid JSON matching this schema:
                 management_themes=data.get("management_themes", ""),
                 bull_case=bull_case.points,
                 bear_case=bear_case.points,
+                bull_confidence=bull_case.confidence,
+                bear_confidence=bear_case.confidence,
+                debate_winner="Bull" if bull_case.confidence > bear_case.confidence else "Bear" if bear_case.confidence > bull_case.confidence else "Draw",
                 verdict=data.get("verdict", ""),
                 debate_transcript=build_debate_transcript(bull_case, bear_case),
                 financial_data=xbrl.model_dump(),
@@ -537,3 +551,44 @@ Return only valid JSON matching this schema:
         error=str(last_error),
     )
     return {"report": error_report, "errors": [f"report_fallback: {last_error}"]}
+
+
+# ── node_portfolio ────────────────────────────────────────────────────────────
+
+@observe()
+async def node_portfolio(state: AnalysisState) -> dict:
+    ticker       = state["ticker"]
+    company_info = state.get("company_info") or {}
+
+    langfuse_context.update_current_observation(
+        name=f"node_portfolio/{ticker}",
+        input={"ticker": ticker},
+    )
+
+    fundamentals = state.get("fundamentals") or FundamentalsOutput()
+    risk         = state.get("risk")         or RiskOutput()
+    sentiment    = state.get("sentiment")    or SentimentOutput()
+    news         = state.get("news")         or NewsOutput()
+    technical    = state.get("technical")    or TechnicalOutput()
+    bull_case    = state.get("bull_case")    or BullCase()
+    bear_case    = state.get("bear_case")    or BearCase()
+
+    from agents.debate_agents import DebateDeps, run_portfolio_agent
+    deps = DebateDeps(
+        ticker=ticker,
+        filing_id=state["filing_id"],
+        company_name=company_info.get("name", ticker),
+        fundamentals=fundamentals,
+        risk=risk,
+        sentiment=sentiment,
+        news=news,
+        technical=technical,
+        bull_case=bull_case,
+        bear_case=bear_case,
+    )
+
+    signal = await run_portfolio_agent(deps)
+    langfuse_context.update_current_observation(
+        output={"signal": signal.signal, "confidence": signal.confidence},
+    )
+    return {"portfolio_signal": signal, "errors": []}

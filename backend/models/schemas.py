@@ -168,8 +168,12 @@ class AnalysisReport(BaseModel):
     management_themes: str = ""
     bull_case: list[str] = []
     bear_case: list[str] = []
-    debate_transcript: list[dict] = []   # [{role, argument}] — LLM-simulated, replaced by CrewAI in Feature 3c
+    bull_confidence: float = 0.5
+    bear_confidence: float = 0.5
+    debate_winner: str = ""          # Bull | Bear | Draw
+    debate_transcript: list[dict] = []   # [{role, argument}]
     verdict: str = ""
+    portfolio_signal: dict | None = None  # {signal, confidence, rationale, key_factors, risk_reward}
     financial_data: dict = {}
     error: str | None = None
 
