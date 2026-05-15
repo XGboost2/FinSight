@@ -73,6 +73,15 @@ class BearCase(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class PortfolioSignal(BaseModel):
+    """Portfolio signal agent output — actionable BUY/HOLD/SELL recommendation."""
+    signal: str = "HOLD"             # BUY | HOLD | SELL
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    rationale: str = ""
+    key_factors: list[str] = Field(default_factory=list)
+    risk_reward: str = ""            # e.g. "Favorable" / "Balanced" / "Unfavorable"
+
+
 # ── node_sentiment output ──────────────────────────────────────────────────────
 
 class SentimentOutput(BaseModel):
@@ -162,6 +171,9 @@ class ReportOutput(BaseModel):
     management_themes: str = ""
     bull_case: list[str] = Field(default_factory=list)
     bear_case: list[str] = Field(default_factory=list)
+    bull_confidence: float = 0.5
+    bear_confidence: float = 0.5
+    debate_winner: str = ""          # Bull | Bear | Draw
     verdict: str = ""
     debate_transcript: list[DebateTurn] = Field(default_factory=list)
     financial_data: dict = Field(default_factory=dict)

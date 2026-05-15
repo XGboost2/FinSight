@@ -25,6 +25,7 @@ from agents.contracts import (
     FindingRow,
     FundamentalsOutput,
     NewsOutput,
+    PortfolioSignal,
     RagChunk,
     ReportOutput,
     RiskOutput,
@@ -361,6 +362,81 @@ async def run_report_agent(deps: DebateDeps) -> ReportOutput:
     except Exception as e:
         logger.error("[report_agent] failed for %s: %s", deps.ticker, e)
         raise
+
+
+# ── PortfolioSignal Agent ──────────────────────────────────────────────────────
+
+_portfolio_agent: Agent | None = None
+
+
+def get_portfolio_agent() -> Agent:
+    global _portfolio_agent
+    if _portfolio_agent is not None:
+        return _portfolio_agent
+
+    _portfolio_agent = Agent(
+        model=_make_model(),
+        output_type=PortfolioSignal,
+        retries=3,
+        system_prompt=(
+            "You are a portfolio strategist issuing a BUY, HOLD, or SELL recommendation. "
+            "You receive a complete equity analysis: bull/bear debate, technicals, sentiment, risk score, and the report verdict. "
+            "Weigh all signals — fundamentals, technicals, sentiment, risk — to issue a single actionable signal. "
+            "signal must be exactly one of: BUY, HOLD, SELL. "
+            "confidence: 0.0=no conviction, 1.0=maximum conviction. "
+            "risk_reward: Favorable | Balanced | Unfavorable. "
+            "key_factors: 3-4 most important factors driving the recommendation. "
+            "rationale: 2-3 sentences explaining the recommendation."
+        ),
+        deps_type=DebateDeps,
+    )
+    return _portfolio_agent
+
+
+def _build_portfolio_prompt(deps: DebateDeps) -> str:
+    bull = deps.bull_case or BullCase()
+    bear = deps.bear_case or BearCase()
+    tech = deps.technical
+    sentiment = deps.sentiment
+    risk = deps.risk.assessment
+
+    bull_points = "\n".join(f"- {p}" for p in bull.points)
+    bear_points = "\n".join(f"- {p}" for p in bear.points)
+
+    return f"""Issue a portfolio signal for {deps.ticker} ({deps.company_name}).
+
+BULL CASE (confidence: {bull.confidence:.0%}):
+{bull_points}
+Catalyst: {bull.key_catalyst}
+
+BEAR CASE (confidence: {bear.confidence:.0%}):
+{bear_points}
+Key risk: {bear.key_risk}
+
+DEBATE WINNER: {'Bull' if bull.confidence > bear.confidence else 'Bear' if bear.confidence > bull.confidence else 'Draw'}
+
+TECHNICALS: {tech.overall_signal} | RSI={tech.rsi} | Price=${tech.price}
+  {tech.verdict}
+
+SENTIMENT: {sentiment.score:.2f} ({sentiment.label})
+RISK SCORE: {risk.risk_score:.2f} — {risk.risk_rationale}
+
+Based on all signals, issue your BUY/HOLD/SELL recommendation with confidence and rationale."""
+
+
+async def run_portfolio_agent(deps: DebateDeps) -> PortfolioSignal:
+    agent = get_portfolio_agent()
+    try:
+        result = await agent.run(_build_portfolio_prompt(deps), deps=deps)
+        signal = result.output
+        if signal.signal not in ("BUY", "HOLD", "SELL"):
+            signal = signal.model_copy(update={"signal": signal.signal.upper()})
+        logger.info("[portfolio_agent] %s signal=%s confidence=%.0f%% for %s",
+                    deps.ticker, signal.signal, signal.confidence * 100, deps.ticker)
+        return signal
+    except Exception as e:
+        logger.error("[portfolio_agent] failed for %s: %s", deps.ticker, e)
+        return PortfolioSignal()
 
 
 def build_debate_transcript(bull: BullCase, bear: BearCase) -> list[DebateTurn]:
