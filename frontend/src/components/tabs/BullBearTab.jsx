@@ -119,7 +119,7 @@ export default function BullBearTab({ ticker, onStatusChange }) {
     setLoading(true)
     setError(null)
     onStatusChange?.('loading')
-    axios.get(`${API_URL}/api/companies/${ticker}/report`)
+    axios.get(`${API_URL}/api/companies/${ticker}/analysis`)
       .then(r => { setReport(r.data); onStatusChange?.('done') })
       .catch(e => { setError(e.response?.data?.detail || 'Failed to load analysis.'); onStatusChange?.('error') })
       .finally(() => setLoading(false))
