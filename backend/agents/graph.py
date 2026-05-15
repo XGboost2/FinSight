@@ -80,17 +80,10 @@ async def _get_checkpointer():
         if _checkpointer is not None:
             return _checkpointer
         try:
-            import redis.asyncio as aioredis
             from langgraph.checkpoint.redis.aio import AsyncRedisSaver
             from config import get_settings
 
-            # Separate async client — checkpointer needs decode_responses=False
-            # because LangGraph serialises checkpoint data as binary (msgpack).
-            async_redis = aioredis.from_url(
-                get_settings().REDIS_URL,
-                decode_responses=False,
-            )
-            saver = AsyncRedisSaver(async_redis)
+            saver = AsyncRedisSaver(get_settings().REDIS_URL)
             await saver.asetup()
             _checkpointer = saver
             logger.info("LangGraph AsyncRedisSaver initialised")
