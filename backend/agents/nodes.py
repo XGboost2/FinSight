@@ -414,6 +414,9 @@ async def node_report(state: AnalysisState) -> dict:
         else:
             winner = "Draw"
 
+        citations = list(
+            {c.chunk_index: c for c in fundamentals.chunks + risk.chunks}.values()
+        )
         report = report.model_copy(update={
             "ticker":             ticker.upper(),
             "company_name":       company_info.get("name", ticker),
@@ -423,6 +426,7 @@ async def node_report(state: AnalysisState) -> dict:
             "bear_confidence":    bear_case.confidence,
             "debate_winner":      winner,
             "debate_transcript":  debate_turns,
+            "citations":          citations,
             "financial_data":     fundamentals.xbrl.model_dump(),
             "generated_at":       datetime.now(timezone.utc).isoformat(),
             "pipeline":           "pydantic-ai",
@@ -532,6 +536,7 @@ Return only valid JSON matching this schema:
                 debate_winner="Bull" if bull_case.confidence > bear_case.confidence else "Bear" if bear_case.confidence > bull_case.confidence else "Draw",
                 verdict=data.get("verdict", ""),
                 debate_transcript=build_debate_transcript(bull_case, bear_case),
+                citations=list({c.chunk_index: c for c in fundamentals.chunks + risk.chunks}.values()),
                 financial_data=xbrl.model_dump(),
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 pipeline="langgraph-fallback",

@@ -176,6 +176,7 @@ class ReportOutput(BaseModel):
     debate_winner: str = ""          # Bull | Bear | Draw
     verdict: str = ""
     debate_transcript: list[DebateTurn] = Field(default_factory=list)
+    citations: list[RagChunk] = Field(default_factory=list)
     financial_data: dict = Field(default_factory=dict)
     generated_at: str = ""
     pipeline: str = "langgraph"

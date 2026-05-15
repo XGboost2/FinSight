@@ -314,7 +314,7 @@ async def get_analysis(request: Request, ticker: str, refresh: bool = False) -> 
     company_info = get_ticker_info(redis, ticker) or {}
 
     try:
-        final_state = await run_analysis(ticker, record["filing_id"], company_info)
+        final_state = await run_analysis(ticker, record["filing_id"], company_info, refresh=refresh)
     except Exception as e:
         logger.error("LangGraph pipeline failed for %s: %s", ticker, e, exc_info=True)
         raise HTTPException(502, "Analysis pipeline failed")

@@ -174,10 +174,11 @@ class AnalysisReport(BaseModel):
     debate_transcript: list[dict] = []   # [{role, argument}]
     verdict: str = ""
     portfolio_signal: dict | None = None  # {signal, confidence, rationale, key_factors, risk_reward}
+    citations: list[dict] = []
     financial_data: dict = {}
     error: str | None = None
 
-    @field_validator("risk_factors", "bull_case", "bear_case", "findings_table", "debate_transcript", mode="before")
+    @field_validator("risk_factors", "bull_case", "bear_case", "findings_table", "debate_transcript", "citations", mode="before")
     @classmethod
     def none_to_empty(cls, v):
         return v if v is not None else []

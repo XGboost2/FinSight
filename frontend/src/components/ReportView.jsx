@@ -5,6 +5,7 @@ import {
   AlertTriangle, CheckCircle, Shield, Activity,
 } from 'lucide-react'
 import { ReportSkeleton } from './Skeleton'
+import CitationPanel from './CitationPanel'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -227,6 +228,8 @@ export default function ReportView({ ticker, compact = false, ingesting = false,
           </div>
         )
       })()}
+
+      {!compact && <CitationPanel citations={report.citations} />}
     </div>
   )
 }

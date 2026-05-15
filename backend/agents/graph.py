@@ -31,12 +31,19 @@ Topology:
 Analyst nodes run in parallel. Bull → Bear → Report run sequentially so each
 agent can read the previous one's typed output. A failed analyst node does not
 block the pipeline — the debate agents get empty defaults.
+
+Checkpoint resumption:
+  Each run is keyed by thread_id = "finsight:{ticker}:{filing_id}".
+  If the pipeline crashes mid-run (e.g. LLM timeout), the next call with the
+  same ticker+filing resumes from the last completed node via AsyncRedisSaver.
+  refresh=True uses a UUID-suffixed thread_id to guarantee a clean run.
 """
 
 import asyncio
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
@@ -58,10 +65,44 @@ logger = logging.getLogger(__name__)
 _graph = None
 _graph_lock = asyncio.Lock()
 
+_checkpointer = None
+_checkpointer_lock = asyncio.Lock()
+
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 
-def _build() -> Any:
+async def _get_checkpointer():
+    """Singleton AsyncRedisSaver — created once, reused for all graph invocations."""
+    global _checkpointer
+    if _checkpointer is not None:
+        return _checkpointer
+    async with _checkpointer_lock:
+        if _checkpointer is not None:
+            return _checkpointer
+        try:
+            import redis.asyncio as aioredis
+            from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+            from config import get_settings
+
+            # Separate async client — checkpointer needs decode_responses=False
+            # because LangGraph serialises checkpoint data as binary (msgpack).
+            async_redis = aioredis.from_url(
+                get_settings().REDIS_URL,
+                decode_responses=False,
+            )
+            saver = AsyncRedisSaver(async_redis)
+            await saver.asetup()
+            _checkpointer = saver
+            logger.info("LangGraph AsyncRedisSaver initialised")
+        except Exception as e:
+            logger.warning(
+                "Checkpoint Redis unavailable (%s) — pipeline runs without crash recovery", e
+            )
+            _checkpointer = None  # explicitly mark as failed so we don't retry every call
+    return _checkpointer
+
+
+def _build(checkpointer=None) -> Any:
     g = StateGraph(AnalysisState)
 
     # Analyst nodes (parallel)
@@ -97,7 +138,7 @@ def _build() -> Any:
     g.add_edge("report",    "portfolio")
     g.add_edge("portfolio", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 async def get_graph() -> Any:
@@ -105,39 +146,60 @@ async def get_graph() -> Any:
     if _graph is None:
         async with _graph_lock:
             if _graph is None:
-                _graph = _build()
-                logger.info("LangGraph analysis pipeline compiled (pydantic-ai agents)")
+                checkpointer = await _get_checkpointer()
+                _graph = _build(checkpointer=checkpointer)
+                logger.info(
+                    "LangGraph analysis pipeline compiled (checkpointer=%s)",
+                    "AsyncRedisSaver" if checkpointer else "none",
+                )
     return _graph
 
 
-async def run_analysis(ticker: str, filing_id: str, company_info: dict) -> dict:
+async def run_analysis(
+    ticker: str,
+    filing_id: str,
+    company_info: dict,
+    refresh: bool = False,
+) -> dict:
     """
     Execute the full analysis pipeline for a ticker.
     Returns the final AnalysisState after all nodes complete.
     The report lives at state["report"].
+
+    thread_id is stable per ticker+filing so a crashed run can resume.
+    refresh=True appends a UUID suffix to force a clean run.
     """
     if not _TICKER_RE.match(ticker.upper()):
         raise ValueError(f"Invalid ticker format: {ticker}")
     graph = await get_graph()
 
+    thread_id = f"finsight:{ticker.upper()}:{filing_id}"
+    if refresh:
+        thread_id = f"{thread_id}:{uuid4().hex[:8]}"
+
+    config: dict = {"configurable": {"thread_id": thread_id}} if _checkpointer else {}
+
     initial_state: AnalysisState = {
-        "ticker":       ticker.upper(),
-        "filing_id":    filing_id,
-        "company_info": company_info or {},
-        "fundamentals": None,
-        "risk":         None,
-        "sentiment":    None,
-        "news":         None,
-        "technical":    None,
-        "bull_case":         None,
-        "bear_case":         None,
-        "report":            None,
-        "portfolio_signal":  None,
-        "errors":            [],
+        "ticker":         ticker.upper(),
+        "filing_id":      filing_id,
+        "company_info":   company_info or {},
+        "fundamentals":   None,
+        "risk":           None,
+        "sentiment":      None,
+        "news":           None,
+        "technical":      None,
+        "bull_case":      None,
+        "bear_case":      None,
+        "report":         None,
+        "portfolio_signal": None,
+        "errors":         [],
     }
 
-    logger.info("LangGraph pipeline starting: ticker=%s filing_id=%s", ticker, filing_id)
-    final_state = await graph.ainvoke(initial_state)
+    logger.info(
+        "LangGraph pipeline starting: ticker=%s filing_id=%s thread_id=%s",
+        ticker, filing_id, thread_id if config else "none",
+    )
+    final_state = await graph.ainvoke(initial_state, config=config)
 
     if final_state.get("errors"):
         logger.warning(

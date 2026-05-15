@@ -21,6 +21,7 @@ celery>=5.3.0
 
 # LangGraph — multi-node analysis pipeline
 langgraph>=0.2.0
+langgraph-checkpoint-redis>=0.0.1
 
 # Technical indicators (Feature 14)
 yfinance>=0.2.40
