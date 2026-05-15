@@ -331,34 +331,104 @@ Leave generated_at, pipeline, error, financial_data, debate_transcript as empty/
 
 # ── Convenience runners ────────────────────────────────────────────────────────
 
-async def run_bull_agent(deps: DebateDeps) -> BullCase:
+async def run_bull_agent(deps: DebateDeps, max_corrections: int = 2) -> BullCase:
+    from agents.validators import validate_bull_case
+
     agent = get_bull_agent()
+    prompt = _build_bull_prompt(deps)
+
     try:
-        result = await agent.run(_build_bull_prompt(deps), deps=deps)
-        logger.info("[bull_agent] %d points for %s", len(result.output.points), deps.ticker)
-        return result.output
+        for attempt in range(1 + max_corrections):
+            result = await agent.run(prompt, deps=deps)
+            output = result.output
+            issues = validate_bull_case(output, deps.ticker)
+
+            if not issues:
+                logger.info("[bull_agent] %d points for %s (attempt %d)",
+                            len(output.points), deps.ticker, attempt + 1)
+                return output
+
+            if attempt < max_corrections:
+                correction = (
+                    "\n\nYour previous output had these issues — fix them:\n"
+                    + "\n".join(f"- {i}" for i in issues)
+                )
+                prompt = _build_bull_prompt(deps) + correction
+                logger.info("[bull_agent] self-correcting for %s: attempt %d, %d issues",
+                            deps.ticker, attempt + 1, len(issues))
+
+        logger.warning("[bull_agent] returning output with %d unresolved issues for %s",
+                       len(issues), deps.ticker)
+        return output
     except Exception as e:
         logger.error("[bull_agent] failed for %s: %s", deps.ticker, e)
         return BullCase(points=[], key_catalyst="", confidence=0.5)
 
 
-async def run_bear_agent(deps: DebateDeps) -> BearCase:
+async def run_bear_agent(deps: DebateDeps, max_corrections: int = 2) -> BearCase:
+    from agents.validators import validate_bear_case
+
     agent = get_bear_agent()
+    bull_points = deps.bull_case.points if deps.bull_case else []
+    prompt = _build_bear_prompt(deps)
+
     try:
-        result = await agent.run(_build_bear_prompt(deps))
-        logger.info("[bear_agent] %d points for %s", len(result.output.points), deps.ticker)
-        return result.output
+        for attempt in range(1 + max_corrections):
+            result = await agent.run(prompt)
+            output = result.output
+            issues = validate_bear_case(output, deps.ticker, bull_points)
+
+            if not issues:
+                logger.info("[bear_agent] %d points for %s (attempt %d)",
+                            len(output.points), deps.ticker, attempt + 1)
+                return output
+
+            if attempt < max_corrections:
+                correction = (
+                    "\n\nYour previous output had these issues — fix them:\n"
+                    + "\n".join(f"- {i}" for i in issues)
+                )
+                prompt = _build_bear_prompt(deps) + correction
+                logger.info("[bear_agent] self-correcting for %s: attempt %d, %d issues",
+                            deps.ticker, attempt + 1, len(issues))
+
+        logger.warning("[bear_agent] returning output with %d unresolved issues for %s",
+                       len(issues), deps.ticker)
+        return output
     except Exception as e:
         logger.error("[bear_agent] failed for %s: %s", deps.ticker, e)
         return BearCase(points=[], key_risk="", confidence=0.5)
 
 
-async def run_report_agent(deps: DebateDeps) -> ReportOutput:
+async def run_report_agent(deps: DebateDeps, max_corrections: int = 2) -> ReportOutput:
+    from agents.validators import validate_report
+
     agent = get_report_agent()
+    prompt = _build_report_prompt(deps)
+
     try:
-        result = await agent.run(_build_report_prompt(deps), deps=deps)
-        logger.info("[report_agent] verdict=%s for %s", bool(result.output.verdict), deps.ticker)
-        return result.output
+        for attempt in range(1 + max_corrections):
+            result = await agent.run(prompt, deps=deps)
+            output = result.output
+            issues = validate_report(output, deps.ticker)
+
+            if not issues:
+                logger.info("[report_agent] verdict=%s for %s (attempt %d)",
+                            bool(output.verdict), deps.ticker, attempt + 1)
+                return output
+
+            if attempt < max_corrections:
+                correction = (
+                    "\n\nYour previous output had these issues — fix them:\n"
+                    + "\n".join(f"- {i}" for i in issues)
+                )
+                prompt = _build_report_prompt(deps) + correction
+                logger.info("[report_agent] self-correcting for %s: attempt %d, %d issues",
+                            deps.ticker, attempt + 1, len(issues))
+
+        logger.warning("[report_agent] returning output with %d unresolved issues for %s",
+                       len(issues), deps.ticker)
+        return output
     except Exception as e:
         logger.error("[report_agent] failed for %s: %s", deps.ticker, e)
         raise
@@ -424,16 +494,38 @@ RISK SCORE: {risk.risk_score:.2f} — {risk.risk_rationale}
 Based on all signals, issue your BUY/HOLD/SELL recommendation with confidence and rationale."""
 
 
-async def run_portfolio_agent(deps: DebateDeps) -> PortfolioSignal:
+async def run_portfolio_agent(deps: DebateDeps, max_corrections: int = 2) -> PortfolioSignal:
+    from agents.validators import validate_portfolio_signal
+
     agent = get_portfolio_agent()
+    prompt = _build_portfolio_prompt(deps)
+
     try:
-        result = await agent.run(_build_portfolio_prompt(deps), deps=deps)
-        signal = result.output
-        if signal.signal not in ("BUY", "HOLD", "SELL"):
-            signal = signal.model_copy(update={"signal": signal.signal.upper()})
-        logger.info("[portfolio_agent] %s signal=%s confidence=%.0f%% for %s",
-                    deps.ticker, signal.signal, signal.confidence * 100, deps.ticker)
-        return signal
+        for attempt in range(1 + max_corrections):
+            result = await agent.run(prompt, deps=deps)
+            output = result.output
+            if output.signal not in ("BUY", "HOLD", "SELL"):
+                output = output.model_copy(update={"signal": output.signal.upper()})
+            issues = validate_portfolio_signal(output, deps.ticker)
+
+            if not issues:
+                logger.info("[portfolio_agent] %s signal=%s confidence=%.0f%% for %s (attempt %d)",
+                            deps.ticker, output.signal, output.confidence * 100,
+                            deps.ticker, attempt + 1)
+                return output
+
+            if attempt < max_corrections:
+                correction = (
+                    "\n\nYour previous output had these issues — fix them:\n"
+                    + "\n".join(f"- {i}" for i in issues)
+                )
+                prompt = _build_portfolio_prompt(deps) + correction
+                logger.info("[portfolio_agent] self-correcting for %s: attempt %d, %d issues",
+                            deps.ticker, attempt + 1, len(issues))
+
+        logger.warning("[portfolio_agent] returning output with %d unresolved issues for %s",
+                       len(issues), deps.ticker)
+        return output
     except Exception as e:
         logger.error("[portfolio_agent] failed for %s: %s", deps.ticker, e)
         return PortfolioSignal()

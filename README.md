@@ -35,9 +35,11 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 ### AI Analysis
 | Feature | Detail |
 |---------|--------|
-| **LangGraph Pipeline** | `StateGraph` fan-out/fan-in: 5 nodes run in parallel (fundamentals, risk, sentiment, news, technical) → bull → bear → report. Typed Pydantic contracts at every boundary. `GET /api/companies/{ticker}/analysis`. 24h Redis cache |
+| **LangGraph Pipeline** | `StateGraph` fan-out/fan-in: 5 nodes run in parallel (fundamentals, risk, sentiment, news, technical) → bull → bear → report → portfolio. Typed Pydantic contracts at every boundary. `GET /api/companies/{ticker}/analysis`. 24h Redis cache |
 | **Pydantic AI Agents** | `FundamentalsAnalyst` + `RiskAnalyst` (deepseek-chat, typed tool outputs). `BullResearcher` + `BearResearcher` (sequential debate, Bear has live `search_risk_evidence` RAG tool) + `ReportWriter`. `result_type` enforced — validated output or exception, no raw JSON parsing |
 | **Comprehensive Analysis Report** | Full equity research note: findings table (Revenue / Profitability / Risk / Sentiment with signal badges), risk score gauge (0–100), trend narrative, management themes, bull/bear case bullets, verdict |
+| **Portfolio Signal Agent** | Final `node_portfolio` LangGraph node after ReportWriter — reads all analyst + debate outputs and produces typed `PortfolioSignal` (BUY/HOLD/SELL, confidence, rationale, key_factors, risk_reward). Displayed as badge above Verdict |
+| **Full Citation Trail** | `citations: list[RagChunk]` on `ReportOutput` — deduped by `chunk_index` from `fundamentals.chunks + risk.chunks`. Flows end-to-end: RAG → RagChunk → node_report → `AnalysisReport.citations` → API response |
 | **FinBERT Sentiment** | `ProsusAI/finbert` runs locally on CPU — zero API cost. Scores MD&A (Item 7) chunks: positive / negative / neutral. Aggregates to continuous scalar `(avg_pos - avg_neg + 1) / 2`. Filters boilerplate before inference |
 | **YoY Risk Factor Diff** | Compares Item 1A text between current and prior year 10-K using `difflib` + BGE semantic matching. Classifies paragraphs as new / changed / removed / unchanged. Handles rewording that isn't a real change |
 | **Bull/Bear Debate** | Real sequential Pydantic AI agents. Bull reads all analyst outputs → typed `BullCase`. Bear reads BullCase + calls `search_risk_evidence` (live RAG) to retrieve counter-evidence → typed `BearCase`. ReportWriter synthesises both → `ReportOutput` |
@@ -62,6 +64,7 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 | **Redis TTL Strategy** | Different TTLs per data type: sentiment 30d, diff 30d, report 24h, dashboard 7d, news 1hr, technicals 1hr. Matches how often data actually changes |
 | **Session Persistence** | Last selected company persists across browser refresh via localStorage. Restore is two fast Redis reads — no pipeline re-execution |
 | **Graceful Degradation** | Every LLM call has a mock fallback. Reranker falls back to RRF order on failure. News failures don't block the report |
+| **LangGraph Checkpoint Resumption** | `AsyncRedisSaver` 0.4.1 singleton in `graph.py` — stable `thread_id = "finsight:{ticker}:{filing_id}"` for crash recovery. `refresh=True` appends UUID suffix for clean re-runs. Graceful degradation: pipeline continues without checkpointing if Redis unavailable |
 
 ### Frontend
 | Feature | Detail |
@@ -71,7 +74,8 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 | **Risk Tab** | Risk score gauge, top risk factor bullets, 8-K event feed, YoY diff (new/changed/removed paragraphs) |
 | **Sentiment Tab** | FinBERT score with breakdown (positive/negative/neutral class probabilities), most polarised MD&A sentences |
 | **Technical Tab** | Computed indicators table (RSI, MACD, SMA50/200, Bollinger Bands, Volume), AI verdict paragraph, signal breakdown (buy/neutral/sell counts), TradingView Technical Analysis widget |
-| **Bull vs Bear Tab** | Bull case bullets, Bear case bullets, 4-turn LLM debate transcript |
+| **Bull vs Bear Tab** | Bull case bullets, Bear case bullets, 4-turn LLM debate transcript, debate winner display (Bull/Bear/Draw) |
+| **CitationPanel** | Collapsible panel below Verdict — treasury-green left-border cards, [N] citation index, section label (`item` field), "SEC 10-K" source tag, expand/collapse per chunk. Only shown in full (non-compact) report view |
 | **News Tab** | Finnhub headlines with FinBERT sentiment badge per article |
 | **Compare View** | Single overlay chart (% normalised, both tickers on one canvas), risk score + sentiment side-by-side, financial metrics bar chart, YoY revenue trend, LLM head-to-head analysis, compact reports for both tickers |
 | **TradingView Integration** | StockChart (Symbol Overview, area line, date ranges). CompareOverlayChart (two tickers overlaid, percentage scale). Technical Analysis widget. All theme-aware — rebuild on dark/light toggle via MutationObserver |
@@ -116,12 +120,12 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       │     technical.py             ← yfinance OHLCV → RSI/MACD/SMA/BB/Vol + LLM verdict
       │
       ├── agents/
-      │     contracts.py             ← Pydantic I/O contracts (FundamentalsOutput, RiskOutput, TechnicalOutput, BullCase, BearCase, ReportOutput…)
+      │     contracts.py             ← Pydantic I/O contracts (FundamentalsOutput, RiskOutput, TechnicalOutput, BullCase, BearCase, ReportOutput, PortfolioSignal; citations: list[RagChunk] on ReportOutput)
       │     state.py                 ← AnalysisState TypedDict with typed node outputs
       │     analyst_agents.py        ← FundamentalsAnalyst + RiskAnalyst (Pydantic AI, deepseek-chat, typed tool outputs)
       │     debate_agents.py         ← BullResearcher, BearResearcher (search_risk_evidence tool), ReportWriter (Pydantic AI)
-      │     nodes.py                 ← node_fundamentals, node_risk, node_sentiment, node_news, node_technical, node_bull, node_bear, node_report
-      │     graph.py                 ← StateGraph: START → [5 parallel nodes] → bull → bear → report → END
+      │     nodes.py                 ← node_fundamentals, node_risk, node_sentiment, node_news, node_technical, node_bull, node_bear, node_report, node_portfolio
+      │     graph.py                 ← StateGraph: START → [5 parallel nodes] → bull → bear → report → portfolio → END. AsyncRedisSaver checkpointer (0.4.1)
       │
       ├── tasks/
       │     edgar_tasks.py           ← Celery: ingest → embed → classify → pre-gen report
@@ -364,11 +368,12 @@ finsight-ai/
 │           ├── CompareView.jsx        ← overlay chart + risk/sentiment + reports
 │           ├── FilingPanel.jsx        ← RAG chat + 8-model selector
 │           ├── CostPanel.jsx          ← LLM cost modal
+│           ├── CitationPanel.jsx      ← collapsible citation cards (treasury-green, [N] index, SEC 10-K source tag)
 │           ├── StatusDots.jsx         ← Redis/Qdrant health indicators
 │           └── tabs/
 │               ├── RiskTab.jsx        ← risk gauge, factors, 8-K events, YoY diff
 │               ├── SentimentTab.jsx   ← FinBERT score, breakdown, sentences
-│               ├── BullBearTab.jsx    ← bull/bear bullets + debate transcript
+│               ├── BullBearTab.jsx    ← bull/bear bullets + debate transcript + winner display
 │               ├── TechnicalTab.jsx   ← computed indicators + LLM verdict + TV widget
 │               └── NewsTab.jsx        ← Finnhub headlines + sentiment badges
 └── tests/
@@ -420,12 +425,12 @@ finsight-ai/
 - [x] **Pydantic AI agents** — `FundamentalsAnalyst` + `RiskAnalyst` (typed tool outputs, deepseek-chat). `BullResearcher` + `BearResearcher` (sequential debate, Bear has live `search_risk_evidence` RAG tool) + `ReportWriter`. `result_type` enforced at every agent boundary
 - [x] **Real Bull/Bear debate** — Bull reads all 5 analyst outputs → typed `BullCase`. Bear reads BullCase + retrieves Item 1A counter-evidence via RAG tool → typed `BearCase`. Replaces old single-LLM-call simulation
 - [x] **TechnicalAnalyst node** — 5th parallel node. RSI, MACD, SMA50/200, Bollinger Bands, volume fed into `DebateDeps`. Bull prompt flags fundamental/technical convergence; Bear prompt surfaces RSI overbought and sell signals
+- [x] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final LangGraph node (`node_portfolio`). Typed `PortfolioSignal` contract wired into `AnalysisState` and `AnalysisReport.portfolio_signal`
+- [x] **LangGraph checkpoint resumption** — `AsyncRedisSaver` 0.4.1 crash-safe pipeline. Stable `thread_id = "finsight:{ticker}:{filing_id}"`. Graceful degradation if Redis unavailable
+- [x] **Full citation trail** — `citations: list[RagChunk]` deduped by `chunk_index`. Flows RAG → node_report → API response. `CitationPanel.jsx` collapsible below Verdict
 
 ### Planned
-- [ ] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final LangGraph node
 - [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code and any MCP client
-- [ ] **LangGraph checkpoint resumption** — RedisSaver crash-safe pipeline (60–120s runs)
-- [ ] **Full citation trail** — every finding traces to exact filing chunk
 - [ ] **Persistent analysis journal** — risk score / sentiment tracked over time per company
 - [ ] **Multi-filing RAG** — cross-year questions ("how have risks changed over 3 years?")
 - [ ] **Competitor extraction** — spaCy NER on Item 1 → ticker-matched competitor graph
@@ -456,6 +461,25 @@ finsight-ai/
 ---
 
 ## Changelog
+
+### Day 17 — 2026-05-15
+
+**Portfolio Signal Agent**
+- New `node_portfolio` LangGraph node after ReportWriter — reads all analyst + debate outputs and produces typed `PortfolioSignal` (BUY/HOLD/SELL, confidence, rationale, key_factors, risk_reward)
+- `PortfolioSignal` Pydantic contract in `agents/contracts.py`, wired into `AnalysisState` and serialised into `AnalysisReport.portfolio_signal`
+- Debate winner display (Bull/Bear/Draw) added to BullBearTab
+
+**Full Citation Trail**
+- `citations: list[RagChunk]` on `ReportOutput` — deduped by `chunk_index` from `fundamentals.chunks + risk.chunks` in both the Pydantic AI agent path and the LLM fallback path
+- `citations: list[dict]` on `AnalysisReport` — flows end-to-end: RAG → RagChunk → node_report → model_dump() → API response
+- `CitationPanel.jsx` — collapsible panel below Verdict, treasury-green left-border cards, section label, [N] citation index, "SEC 10-K" source tag, expand/collapse per chunk
+
+**LangGraph Checkpoint Resumption**
+- `langgraph-checkpoint-redis` 0.4.1 wired as `AsyncRedisSaver` singleton in `graph.py`
+- `AsyncRedisSaver(REDIS_URL)` — 0.4.x API takes URL string directly, not a Redis client
+- Stable `thread_id = "finsight:{ticker}:{filing_id}"` for crash recovery; `refresh=True` appends UUID suffix for clean re-runs
+- Graceful degradation: if Redis checkpoint unavailable, pipeline continues without crash recovery (warning logged)
+- `routes.py` passes `refresh` flag down to `run_analysis()`
 
 ### Day 16 — 2026-05-14
 
