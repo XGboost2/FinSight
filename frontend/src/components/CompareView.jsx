@@ -3,7 +3,7 @@ import { Loader, ArrowLeft, Shield, Activity } from 'lucide-react'
 import axios from 'axios'
 import ReportView from './ReportView'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
 
 function sanitizeTicker(t) {

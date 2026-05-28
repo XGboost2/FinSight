@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import { FileText, MessageCircle, Loader, ChevronRight } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const SAMPLE_QUESTIONS = [
   'What are the main risk factors?',

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Newspaper, TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Loader, AlertTriangle } from 'lucide-react'
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const SENTIMENT_ICON = {
   positive: <TrendingUp  size={13} className="news-sent-pos" />,

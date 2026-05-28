@@ -7,7 +7,7 @@ import {
 import { ReportSkeleton } from './Skeleton'
 import CitationPanel from './CitationPanel'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const SIGNAL_CONFIG = {
   positive: { cls: 'signal-positive', icon: '✅', label: 'Positive' },

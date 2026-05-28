@@ -22,7 +22,7 @@ import RiskTab from './components/tabs/RiskTab'
 import TechnicalTab from './components/tabs/TechnicalTab'
 import BullBearTab from './components/tabs/BullBearTab'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 const SESSION_KEY = 'finsight-session-id'
 
 export default function App() {

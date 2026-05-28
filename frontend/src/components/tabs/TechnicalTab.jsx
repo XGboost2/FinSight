@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { LineChart, TrendingUp, TrendingDown, Minus, Loader, AlertTriangle, RefreshCw } from 'lucide-react'
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/
 

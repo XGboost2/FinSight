@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Shield, AlertTriangle, Calendar, Tag, Loader, Plus, Minus, ArrowRight, RefreshCw } from 'lucide-react'
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const EVENT_COLORS = {
   earnings:    'event-earnings',

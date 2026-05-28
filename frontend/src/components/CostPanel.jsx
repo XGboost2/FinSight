@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { DollarSign, RefreshCw, Loader, X } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 function fmt(n) {
   if (!n) return '$0.000000'

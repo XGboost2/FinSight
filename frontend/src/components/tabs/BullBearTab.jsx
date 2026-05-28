@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Scale, TrendingUp, TrendingDown, Loader, AlertTriangle, MessageSquare, Award, Target, Shield, Zap } from 'lucide-react'
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 const ROLE_STYLES = {
   Bull: { cls: 'debate-bull-msg',  icon: <TrendingUp  size={13} />, label: 'Bull' },

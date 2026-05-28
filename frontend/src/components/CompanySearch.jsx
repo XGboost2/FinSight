@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { Search, ArrowRight } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 export default function CompanySearch({ onSelect, placeholder = 'Search company…', disabled = false, variant = 'default' }) {
   const isLanding = variant === 'landing'

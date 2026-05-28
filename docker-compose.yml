@@ -37,8 +37,7 @@ services:
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - VITE_API_URL=http://localhost:8000
-      # Alpha Vantage calls should be proxied through the backend, not exposed to the browser
+      # API calls proxied via Vite server to http://backend:8000 — no VITE_API_URL needed
     depends_on:
       - backend
     restart: unless-stopped
