@@ -597,3 +597,27 @@ async def node_portfolio(state: AnalysisState) -> dict:
         output={"signal": signal.signal, "confidence": signal.confidence},
     )
     return {"portfolio_signal": signal, "errors": []}
+
+
+# ── node_judge ────────────────────────────────────────────────────────────────
+
+@observe()
+async def node_judge(state: AnalysisState) -> dict:
+    ticker = state["ticker"]
+    report = state.get("report")
+
+    langfuse_context.update_current_observation(
+        name=f"node_judge/{ticker}",
+        input={"ticker": ticker},
+    )
+
+    if report is None:
+        return {"judge": None, "errors": []}
+
+    from services.judge import evaluate_report
+    judge = await evaluate_report(report)
+
+    langfuse_context.update_current_observation(
+        output={"overall": judge.overall, "model": judge.model},
+    )
+    return {"judge": judge, "errors": []}

@@ -14,6 +14,7 @@ from agents.contracts import (
     BullCase,
     BearCase,
     FundamentalsOutput,
+    JudgeOutput,
     NewsOutput,
     PortfolioSignal,
     ReportOutput,
@@ -43,6 +44,9 @@ class AnalysisState(TypedDict):
     # ── Final output ──────────────────────────────────────────────────
     report: ReportOutput | None
     portfolio_signal: PortfolioSignal | None
+
+    # ── LLM-as-judge evaluation (set by node_judge after portfolio) ──
+    judge: JudgeOutput | None
 
     # ── Error accumulator (append-only, merged across parallel nodes) ─
     errors: Annotated[list[str], operator.add]

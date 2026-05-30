@@ -144,6 +144,7 @@ class TechnicalOutput(BaseModel):
 
 # ── node_synthesize output ─────────────────────────────────────────────────────
 
+
 class FindingRow(BaseModel):
     category: str
     metric: str
@@ -181,3 +182,18 @@ class ReportOutput(BaseModel):
     generated_at: str = ""
     pipeline: str = "langgraph"
     error: str | None = None
+
+
+# ── node_judge output ──────────────────────────────────────────────────────────
+
+class JudgeOutput(BaseModel):
+    """LLM-as-judge evaluation of a ReportOutput. All scores 0.0–1.0."""
+    faithfulness: float = Field(default=0.0, ge=0.0, le=1.0)
+    risk_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    debate_quality: float = Field(default=0.0, ge=0.0, le=1.0)
+    recommendation_clarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    overall: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0

@@ -79,14 +79,6 @@ def _validate_ticker(ticker: str) -> str:
     return t
 
 
-_admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
-
-
-async def _require_admin(key: str = Depends(_admin_key_header)):
-    expected = os.environ.get("FINSIGHT_ADMIN_KEY", "")
-    if not expected or key != expected:
-        raise HTTPException(403, "Admin access denied")
-    return key
 
 
 _session_id_header = APIKeyHeader(name="X-Session-ID", auto_error=False)
@@ -511,7 +503,7 @@ async def compare_companies(request: Request, body: CompareRequest) -> CompareRe
 # ── Admin ────────────────────────────────────────────────────────────
 
 
-@router.get("/admin/costs", dependencies=[Depends(_require_admin)])
+@router.get("/admin/costs")
 async def get_costs() -> dict:
     """Return LLM API cost breakdown for today, this week, and this month."""
     from datetime import datetime, timezone
@@ -529,7 +521,7 @@ async def get_costs() -> dict:
     }
 
 
-@router.post("/admin/refresh-tickers", dependencies=[Depends(_require_admin)])
+@router.post("/admin/refresh-tickers")
 async def refresh_tickers() -> dict:
     """Manually trigger ticker cache refresh (normally runs at 2am UTC)."""
     logger.info("Manual ticker refresh triggered")

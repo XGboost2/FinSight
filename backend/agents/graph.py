@@ -26,6 +26,10 @@ Topology:
                         │  portfolio   │  ← PortfolioSignal agent (BUY/HOLD/SELL)
                         └──────────────┘
                                 ▼
+                        ┌──────────────┐
+                        │   judge      │  ← LLM-as-judge (quality scores → Langfuse)
+                        └──────────────┘
+                                ▼
                               END
 
 Analyst nodes run in parallel. Bull → Bear → Report run sequentially so each
@@ -57,6 +61,7 @@ from agents.nodes import (
     node_bear,
     node_report,
     node_portfolio,
+    node_judge,
 )
 from agents.state import AnalysisState
 
@@ -110,6 +115,7 @@ def _build(checkpointer=None) -> Any:
     g.add_node("bear",      node_bear)
     g.add_node("report",    node_report)
     g.add_node("portfolio", node_portfolio)
+    g.add_node("judge",     node_judge)
 
     # Fan-out: START → all 5 analyst nodes simultaneously
     g.add_edge(START, "fundamentals")
@@ -129,7 +135,8 @@ def _build(checkpointer=None) -> Any:
     g.add_edge("bull",      "bear")
     g.add_edge("bear",      "report")
     g.add_edge("report",    "portfolio")
-    g.add_edge("portfolio", END)
+    g.add_edge("portfolio", "judge")
+    g.add_edge("judge",     END)
 
     return g.compile(checkpointer=checkpointer)
 
@@ -173,19 +180,20 @@ async def run_analysis(
     config: dict = {"configurable": {"thread_id": thread_id}} if _checkpointer else {}
 
     initial_state: AnalysisState = {
-        "ticker":         ticker.upper(),
-        "filing_id":      filing_id,
-        "company_info":   company_info or {},
-        "fundamentals":   None,
-        "risk":           None,
-        "sentiment":      None,
-        "news":           None,
-        "technical":      None,
-        "bull_case":      None,
-        "bear_case":      None,
-        "report":         None,
+        "ticker":           ticker.upper(),
+        "filing_id":        filing_id,
+        "company_info":     company_info or {},
+        "fundamentals":     None,
+        "risk":             None,
+        "sentiment":        None,
+        "news":             None,
+        "technical":        None,
+        "bull_case":        None,
+        "bear_case":        None,
+        "report":           None,
         "portfolio_signal": None,
-        "errors":         [],
+        "judge":            None,
+        "errors":           [],
     }
 
     logger.info(
@@ -212,5 +220,9 @@ async def run_analysis(
         final_state["portfolio_signal"] = ps_dict
         if isinstance(final_state["report"], dict):
             final_state["report"]["portfolio_signal"] = ps_dict
+
+    judge = final_state.get("judge")
+    if judge is not None and hasattr(judge, "model_dump"):
+        final_state["judge"] = judge.model_dump()
 
     return final_state
