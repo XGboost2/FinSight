@@ -1,4 +1,4 @@
-"""FinSight AI — LLM integration (Anthropic Claude + OpenAI fallback).
+"""FinSight AI — LLM integration (Kimi primary, DeepSeek secondary, Claude/OpenAI fallback).
 
 Every call logs: model, tokens_in, tokens_out, cost_usd, latency_ms.
 """
@@ -42,8 +42,9 @@ def _get_httpx_client() -> httpx.AsyncClient:
 
 # Cost per 1M tokens (USD) — update as pricing changes
 _PRICING: dict[str, dict[str, float]] = {
+    "kimi-k2.6":         {"input": 0.15,   "output": 0.60},   # verify at platform.moonshot.ai/docs
     "deepseek-v4-flash": {"input": 0.14,   "output": 0.28},   # cache miss; cache hit $0.0028
-    "deepseek-v4-pro":   {"input": 0.435,  "output": 0.87},   # 75% discount until 2026-05-31; full price: $1.74/$3.48
+    "deepseek-v4-pro":   {"input": 1.74,   "output": 3.48},   # full price (discount expired 2026-05-31)
     "claude-haiku-4-5":  {"input": 0.80,  "output": 4.00},
     "claude-sonnet-4-6": {"input": 3.00,  "output": 15.00},
     "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
@@ -53,13 +54,15 @@ _PRICING: dict[str, dict[str, float]] = {
 
 
 def _provider(model: str) -> str:
+    if model.startswith("kimi") or model.startswith("moonshot"):
+        return "kimi"
     if model.startswith("deepseek"):
         return "deepseek"
     if model.startswith("claude"):
         return "anthropic"
     if model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
         return "openai"
-    return "deepseek"
+    return "kimi"
 
 # System prompt for financial analysis
 SYSTEM_PROMPT = """You are FinSight AI, a financial analyst assistant helping users understand SEC 10-K filings.
@@ -80,8 +83,9 @@ def _calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return round(cost, 6)
 
 
-CHEAP_MODEL = "deepseek-v4-flash"  # thinking disabled via API param for non-reasoning calls
-POWER_MODEL = "deepseek-v4-pro"   # thinking model
+CHEAP_MODEL = "kimi-k2.6"   # primary — simple lookups, structured extraction
+POWER_MODEL = "kimi-k2.6"   # primary — complex reasoning (same model, 256k context)
+CHEAP_FALLBACK = "deepseek-v4-flash"  # secondary if Kimi unavailable
 
 # Signals that a question needs multi-step reasoning
 _POWER_KEYWORDS = {
@@ -92,7 +96,7 @@ _POWER_KEYWORDS = {
 
 
 def _route_model(query: str) -> str:
-    """Use deepseek-v4-pro for complex multi-step questions, deepseek-v4-flash for simple lookups."""
+    """Route to Kimi for all queries — POWER_KEYWORDS logged but same model used."""
     q = query.lower()
     if any(kw in q for kw in _POWER_KEYWORDS) or len(query) > 200:
         return POWER_MODEL
@@ -143,7 +147,9 @@ Question: {query}"""
     logger.info("Model router: query_len=%d history=%d → %s (%s)",
                 len(query), len(history or []), routed_model, provider)
 
-    if provider == "deepseek" and settings.DEEPSEEK_API_KEY:
+    if provider == "kimi" and settings.KIMI_API_KEY:
+        result = await _call_kimi(user_message, routed_model, settings, conversation)
+    elif provider == "deepseek" and settings.DEEPSEEK_API_KEY:
         result = await _call_deepseek(user_message, routed_model, settings, conversation)
     elif provider == "anthropic" and settings.ANTHROPIC_API_KEY:
         result = await _call_anthropic(user_message, routed_model, settings, conversation)
@@ -151,8 +157,10 @@ Question: {query}"""
         result = await _call_openai(user_message, routed_model, settings, conversation)
     else:
         logger.warning("No API key for provider=%s model=%s — falling back", provider, routed_model)
-        if settings.DEEPSEEK_API_KEY:
-            result = await _call_deepseek(user_message, CHEAP_MODEL, settings, conversation)
+        if settings.KIMI_API_KEY:
+            result = await _call_kimi(user_message, CHEAP_MODEL, settings, conversation)
+        elif settings.DEEPSEEK_API_KEY:
+            result = await _call_deepseek(user_message, CHEAP_FALLBACK, settings, conversation)
         elif settings.ANTHROPIC_API_KEY:
             result = await _call_anthropic(user_message, "claude-haiku-4-5", settings, conversation)
         elif settings.OPENAI_API_KEY:
@@ -208,8 +216,19 @@ async def call_llm_raw(
 
     text, tok_in, tok_out, m = "", 0, 0, model or CHEAP_MODEL
 
-    if (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
+    if (not model or provider == "kimi") and settings.KIMI_API_KEY:
+        from openai import AsyncOpenAI
         m = model or CHEAP_MODEL
+        client = AsyncOpenAI(api_key=settings.KIMI_API_KEY, base_url=settings.KIMI_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=m, max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.choices[0].message.content or ""
+        tok_in, tok_out = resp.usage.prompt_tokens, resp.usage.completion_tokens
+
+    elif (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
+        m = model or CHEAP_FALLBACK
         extra = {"thinking": {"type": "disabled"}} if m == "deepseek-v4-flash" else {}
         _hc = _get_httpx_client()
         _r = await _hc.post(
@@ -290,6 +309,42 @@ async def _call_anthropic(
 
     return {
         "answer": response.content[0].text,
+        "model_used": model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": _calc_cost(model, tokens_in, tokens_out),
+    }
+
+
+async def _call_kimi(
+    user_message: str,
+    model: str,
+    settings: Any,
+    conversation: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Call Kimi (Moonshot AI) API — OpenAI-compatible, 256k context window."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=settings.KIMI_API_KEY,
+        base_url=settings.KIMI_BASE_URL,
+    )
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += conversation or [{"role": "user", "content": user_message}]
+
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=1024,
+        messages=messages,
+    )
+
+    usage = response.usage
+    tokens_in = usage.prompt_tokens if usage else 0
+    tokens_out = usage.completion_tokens if usage else 0
+
+    return {
+        "answer": response.choices[0].message.content or "",
         "model_used": model,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,

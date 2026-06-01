@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    KIMI_API_KEY: str = ""
+    KIMI_BASE_URL: str = "https://api.moonshot.ai/v1"
 
     # --- SEC EDGAR ---
     # Format: "AppName your@email.com" — required by SEC fair access policy
