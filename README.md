@@ -49,8 +49,8 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 ### LLM Infrastructure
 | Feature | Detail |
 |---------|--------|
-| **Multi-Provider Routing** | DeepSeek (primary, cheapest) → Anthropic Claude → OpenAI → mock response. App never crashes on missing keys |
-| **Smart Model Router** | Auto-routes simple queries to cheap model (`deepseek-chat`), complex reasoning to power model. Keywords like "analyse", "compare", "why" + queries >200 chars trigger the reasoning model |
+| **Multi-Provider Routing** | Kimi/Moonshot AI (primary) → DeepSeek (secondary) → Anthropic Claude → OpenAI → mock response. App never crashes on missing keys |
+| **Smart Model Router** | Auto-routes all queries to `kimi-k2.6` (256k context window handles both simple and complex). DeepSeek Flash is the fallback if Kimi is unavailable. Keywords like "analyse", "compare", "why" + queries >200 chars trigger the power path |
 | **Per-Request Model Override** | 8-model pill selector in the chat panel. Choose DeepSeek Chat/Reasoner, Claude Haiku/Sonnet/Opus, or GPT-4o per query |
 | **LLM Cost Tracker** | Atomic Redis cost recording per call with model, tokens_in, tokens_out, cost_usd, latency_ms. Aggregates day/week/month with per-model breakdown. `$` button in topbar |
 | **JSON Repair** | `json-repair` library + 3-attempt retry for malformed LLM JSON output. Logs which attempt succeeded for prompt quality monitoring |
@@ -60,11 +60,12 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 |---------|--------|
 | **Rate Limiting** | `slowapi` backed by Redis (shared across Uvicorn workers). Per-endpoint limits: ingest 5/min, diff 5/min, sentiment 5/min, report 10/min, compare 10/min, technicals 20/min, news 20/min, dashboard 30/min, search 60/min. Returns 429 + Retry-After |
 | **Structured Logging** | Three rotating log files: `finsight.log` (all), `llm.log` (LLM calls only), `tasks.log` (Celery). 10MB × 5 backups each. Named loggers with propagation |
-| **Langfuse Tracing** | Full `@observe` instrumentation across every LLM call, RAG retrieval, ingest, report generation, and debate. Nested span hierarchy: `report-lookup → report-generate → retrieve-multi × 5 → call-llm-raw + debate`. Chat traces tagged with `user_id=ticker`, `tags=["chat"]`. Cache hits visible. No-op when keys absent |
+| **Langfuse Tracing** | Full `@observe` instrumentation across every LLM call, RAG retrieval, ingest, report generation, and debate. Nested span hierarchy: `report-lookup → report-generate → retrieve-multi × 5 → call-llm-raw + debate`. Chat turns grouped into Langfuse sessions via `propagate_attributes(session_id=...)` — full conversation replay in dashboard. Cache hits visible. No-op when keys absent |
+| **LLM-as-Judge** | `services/judge.py` — after every pipeline run, a second `CHEAP_MODEL` call scores the report on 4 dimensions (faithfulness, risk coverage, debate quality, recommendation clarity). All 5 scores pushed to Langfuse as trace-level numeric scores via `create_score()`. Never raises — zero scores on failure, pipeline unaffected |
 | **Redis TTL Strategy** | Different TTLs per data type: sentiment 30d, diff 30d, report 24h, dashboard 7d, news 1hr, technicals 1hr. Matches how often data actually changes |
 | **Session Persistence** | Last selected company persists across browser refresh via localStorage. Restore is two fast Redis reads — no pipeline re-execution |
 | **Graceful Degradation** | Every LLM call has a mock fallback. Reranker falls back to RRF order on failure. News failures don't block the report |
-| **LangGraph Checkpoint Resumption** | `AsyncRedisSaver` 0.4.1 singleton in `graph.py` — stable `thread_id = "finsight:{ticker}:{filing_id}"` for crash recovery. `refresh=True` appends UUID suffix for clean re-runs. Graceful degradation: pipeline continues without checkpointing if Redis unavailable |
+| **LangGraph Checkpointing** | `MemorySaver` singleton in `graph.py` — stable `thread_id = "finsight:{ticker}:{filing_id}"` for in-process state inspection. `refresh=True` appends UUID suffix for clean re-runs. Note: in-memory only; state does not survive worker restarts |
 
 ### Frontend
 | Feature | Detail |
@@ -170,11 +171,11 @@ Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irre
 
 | Query type | Model | Cost / 1M tokens |
 |------------|-------|-----------------|
-| Simple fact lookup | `deepseek-v4-flash` | $0.14 in / $0.28 out |
-| Complex: "analyse", "compare", "why", >200 chars | `deepseek-v4-pro` | $0.44 in / $0.87 out |
+| All queries (primary) | `kimi-k2.6` | $0.15 in / $0.60 out |
+| Fallback (Kimi unavailable) | `deepseek-v4-flash` | $0.14 in / $0.28 out |
 | User override | Any of 8 models | varies |
 
-**Fallback chain:** DeepSeek → Anthropic Claude → OpenAI → mock response
+**Fallback chain:** Kimi → DeepSeek → Anthropic Claude → OpenAI → mock response
 
 ### Rate Limits
 
@@ -199,7 +200,7 @@ Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irre
 | Sentiment | `ProsusAI/finbert` via HuggingFace transformers (CPU, 110M params) |
 | Agent Orchestration | LangGraph 0.2+ — `StateGraph` fan-out/fan-in parallelism, typed state |
 | Agent Contracts | Pydantic AI (next) — typed tool outputs, `result_type` enforcement |
-| LLM | DeepSeek (primary) · Anthropic Claude · OpenAI (switchable per-request) |
+| LLM | Kimi/Moonshot AI (primary, `kimi-k2.6`) · DeepSeek (secondary) · Anthropic Claude · OpenAI (switchable per-request) |
 | Observability | Langfuse 3 — `@observe` tracing, nested spans, cost + latency per call |
 | Eval | DeepEval — 6 RAG metrics, DeepSeek judge, 20 Q&A pairs, result caching |
 | Financial Data | SEC EDGAR XBRL API (deterministic) · yfinance (technical indicators) |
@@ -426,8 +427,11 @@ finsight-ai/
 - [x] **Real Bull/Bear debate** — Bull reads all 5 analyst outputs → typed `BullCase`. Bear reads BullCase + retrieves Item 1A counter-evidence via RAG tool → typed `BearCase`. Replaces old single-LLM-call simulation
 - [x] **TechnicalAnalyst node** — 5th parallel node. RSI, MACD, SMA50/200, Bollinger Bands, volume fed into `DebateDeps`. Bull prompt flags fundamental/technical convergence; Bear prompt surfaces RSI overbought and sell signals
 - [x] **Portfolio signal agent** — BUY/HOLD/SELL + confidence score as final LangGraph node (`node_portfolio`). Typed `PortfolioSignal` contract wired into `AnalysisState` and `AnalysisReport.portfolio_signal`
-- [x] **LangGraph checkpoint resumption** — `AsyncRedisSaver` 0.4.1 crash-safe pipeline. Stable `thread_id = "finsight:{ticker}:{filing_id}"`. Graceful degradation if Redis unavailable
+- [x] **LangGraph checkpointing** — `MemorySaver` singleton, stable `thread_id = "finsight:{ticker}:{filing_id}"`, `refresh=True` for clean re-runs
 - [x] **Full citation trail** — `citations: list[RagChunk]` deduped by `chunk_index`. Flows RAG → node_report → API response. `CitationPanel.jsx` collapsible below Verdict
+- [x] **LLM-as-judge** — `services/judge.py` scores every pipeline run on 4 dimensions (faithfulness, risk coverage, debate quality, recommendation clarity) and pushes all 5 scores to Langfuse via `create_score()`. Uses `CHEAP_MODEL` (Kimi), never raises
+- [x] **Langfuse session grouping** — chat turns linked to Langfuse sessions via `propagate_attributes(session_id=...)`. Full conversation replay visible in Langfuse dashboard
+- [x] **Kimi/Moonshot AI primary LLM** — migrated from DeepSeek to `kimi-k2.6` as primary. 256k context, $0.15/$0.60 per 1M tokens. DeepSeek Flash retained as secondary fallback
 
 ### Planned
 - [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code and any MCP client
@@ -450,7 +454,7 @@ finsight-ai/
 
 **Why a cross-encoder reranker?** Cosine similarity measures vector proximity, not answer relevance. A chunk titled "Geographic Concentration Risk" won't match a query for "supply chain risks" semantically — but a cross-encoder reading both understands the connection. Two-stage retrieval (fast ANN → precise rerank) is the production standard.
 
-**Why DeepSeek as primary LLM?** Comparable quality to GPT-4 for financial document analysis at ~800x lower cost. Every call logs cost — the savings story becomes a LangFuse interview talking point.
+**Why Kimi as primary LLM?** `kimi-k2.6` has a 256k context window, handles both simple and complex financial queries in a single model, and costs $0.15/$0.60 per 1M tokens — comparable to DeepSeek Flash but with far more context headroom for multi-filing analysis. Every call logs cost — the savings story becomes a Langfuse interview talking point.
 
 **Why Celery over async tasks?** `async/await` keeps the HTTP request open — a 30-60 second ingest would time out browsers. Celery returns a `task_id` immediately; the pipeline runs in a worker process. The request/response separation is the right pattern for long-running jobs.
 
@@ -461,6 +465,33 @@ finsight-ai/
 ---
 
 ## Changelog
+
+### Day 25 — 2026-06-08
+
+**Kimi primary LLM migration**
+- `CHEAP_MODEL` and `POWER_MODEL` both set to `kimi-k2.6` (256k context). `CHEAP_FALLBACK = deepseek-v4-flash`
+- Fallback chain: Kimi → DeepSeek → Anthropic Claude → OpenAI → mock
+- `OpenAIModel` → `OpenAIChatModel` in Pydantic AI agent providers (API rename in pydantic-ai)
+- Removed `langgraph-checkpoint-redis` dependency (incompatible with langgraph 0.2+); replaced with `MemorySaver`
+
+**LLM-as-judge**
+- `services/judge.py` — scores report on faithfulness, risk_coverage, debate_quality, recommendation_clarity (0.0–1.0 each)
+- Pushes 5 numeric scores to Langfuse per pipeline run via `create_score()`; `judge.overall` score includes rationale comment
+- `node_judge` wired as final LangGraph node after `node_portfolio`
+
+**Langfuse SDK v3 migration**
+- `langfuse_context.update_current_observation()` → `_lf().update_current_span()` / `update_current_generation()`
+- `client.score()` → `client.create_score()` across `judge.py`, `routes.py`
+- `usage={"unit": "TOKENS"}` → `usage_details={}` in generation updates
+
+**Langfuse session grouping**
+- Chat traces now attached to Langfuse sessions via `propagate_attributes(session_id=sid)` wrapping `ask_llm`
+- Session replay visible in Langfuse dashboard — full conversation thread in one view
+
+**Multi-filing chat RAG**
+- Chat endpoint retrieves across 10-K + all ingested 10-Q filings simultaneously via `retrieve_multi`
+- Recent 8-K events injected as text block from Redis (`finsight:events:8-K:{ticker}`) — last 10 events
+- Added `quarter` / `recent` section query hints for quarterly earnings questions
 
 ### Day 17 — 2026-05-15
 
@@ -474,11 +505,9 @@ finsight-ai/
 - `citations: list[dict]` on `AnalysisReport` — flows end-to-end: RAG → RagChunk → node_report → model_dump() → API response
 - `CitationPanel.jsx` — collapsible panel below Verdict, treasury-green left-border cards, section label, [N] citation index, "SEC 10-K" source tag, expand/collapse per chunk
 
-**LangGraph Checkpoint Resumption**
-- `langgraph-checkpoint-redis` 0.4.1 wired as `AsyncRedisSaver` singleton in `graph.py`
-- `AsyncRedisSaver(REDIS_URL)` — 0.4.x API takes URL string directly, not a Redis client
-- Stable `thread_id = "finsight:{ticker}:{filing_id}"` for crash recovery; `refresh=True` appends UUID suffix for clean re-runs
-- Graceful degradation: if Redis checkpoint unavailable, pipeline continues without crash recovery (warning logged)
+**LangGraph Checkpointing**
+- `MemorySaver` singleton in `graph.py` — replaces `AsyncRedisSaver` (removed; incompatible with langgraph-checkpoint 4.x serializer)
+- Stable `thread_id = "finsight:{ticker}:{filing_id}"` for in-process state inspection; `refresh=True` appends UUID suffix for clean re-runs
 - `routes.py` passes `refresh` flag down to `run_analysis()`
 
 ### Day 16 — 2026-05-14
