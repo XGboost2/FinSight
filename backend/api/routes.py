@@ -7,6 +7,14 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager, nullcontext
+
+try:
+    from langfuse import propagate_attributes as _lf_propagate
+except ImportError:
+    @contextmanager
+    def _lf_propagate(**_):  # type: ignore
+        yield
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import APIKeyHeader
@@ -714,12 +722,13 @@ async def chat(
 
     # ── LLM call with history ─────────────────────────────────────────
     try:
-        llm_result = await ask_llm(
-            request_body.question, context,
-            model=request_body.model,
-            ticker=ticker,
-            history=history or None,
-        )
+        with _lf_propagate(session_id=sid) if sid else nullcontext():
+            llm_result = await ask_llm(
+                request_body.question, context,
+                model=request_body.model,
+                ticker=ticker,
+                history=history or None,
+            )
     except Exception as e:
         logger.error("LLM call failed for ticker=%s: %s", ticker, e, exc_info=True)
         raise HTTPException(502, "LLM call failed")
