@@ -14,16 +14,15 @@ from ingestion.xbrl import get_xbrl_metrics
 from services.llm import call_llm_raw, _calc_cost
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    from langfuse import observe, get_client as _lf
 except ImportError:
     def observe(*args, **kwargs):       # type: ignore
         def decorator(fn): return fn
         return decorator if args and callable(args[0]) else decorator
-    class langfuse_context:             # type: ignore
-        @staticmethod
-        def update_current_observation(**_): pass
-        @staticmethod
-        def update_current_trace(**_): pass
+    class _LfStub:                      # type: ignore
+        def update_current_span(self, **_): pass
+    _stub = _LfStub()
+    def _lf(): return _stub             # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ async def get_or_generate_report(
     refresh: bool = False,
     filing_type: str = "10-K",
 ) -> dict:
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"report-lookup/{ticker}",
         input={"ticker": ticker, "filing_id": filing_id, "refresh": refresh, "filing_type": filing_type},
     )
@@ -72,7 +71,7 @@ async def get_or_generate_report(
         cached = redis_client.get(cache_key)
         if cached:
             logger.info("Report cache hit: %s (%s)", ticker, filing_type)
-            langfuse_context.update_current_observation(metadata={"cache": "hit"})
+            _lf().update_current_span(metadata={"cache": "hit"})
             return json.loads(cached)
 
     report = await _generate_report(redis_client, ticker, filing_id, fallback_chunks or [])
@@ -93,15 +92,10 @@ async def _generate_report(
     filing_id: str,
     fallback_chunks: list,
 ) -> dict:
-    langfuse_context.update_current_trace(
-        name=f"report/{ticker}",
-        user_id=ticker,
-        tags=["report", "10-K"],
-        metadata={"filing_id": filing_id},
-    )
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"report-generate/{ticker}",
         input={"ticker": ticker, "filing_id": filing_id},
+        metadata={"filing_id": filing_id, "tags": "report,10-K"},
     )
     from rag.pipeline import retrieve, retrieve_multi
     from cache.filing_registry import get_filing_record, list_ingested
@@ -307,7 +301,7 @@ async def _generate_debate(ticker: str, bull_case: list[str], bear_case: list[st
     NOTE (Feature 3c): Replace with real CrewAI Bull + Bear researcher agents
     doing multi-turn reasoning with tool access to filing chunks.
     """
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"debate/{ticker}",
         input={"ticker": ticker, "bull_case": bull_case, "bear_case": bear_case},
     )
@@ -342,12 +336,12 @@ Return only the JSON array. No markdown."""
             raw = raw.split("```")[1].lstrip("json").strip()
         transcript = json.loads(raw.strip())
         logger.info("Debate transcript: %s model=%s cost=$%.4f", ticker, model, _calc_cost(model, tok_in, tok_out))
-        langfuse_context.update_current_observation(
+        _lf().update_current_span(
             output=transcript,
             metadata={"model": model, "cost_usd": _calc_cost(model, tok_in, tok_out)},
         )
         return transcript if isinstance(transcript, list) else []
     except Exception as e:
         logger.warning("Debate generation failed for %s: %s", ticker, e)
-        langfuse_context.update_current_observation(metadata={"error": str(e)})
+        _lf().update_current_span(metadata={"error": str(e)})
         return []

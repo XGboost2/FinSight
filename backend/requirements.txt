@@ -14,14 +14,13 @@ fastembed>=0.3.6
 
 # Cache + Scheduler
 redis>=5.0.0
-apscheduler>=3.10.0
+apscheduler>=3.10.0,<4.0.0
 
 # Agents + Task Queue
 celery>=5.3.0
 
 # LangGraph — multi-node analysis pipeline
 langgraph>=0.2.0
-langgraph-checkpoint-redis>=0.0.1
 
 # Technical indicators (Feature 14)
 yfinance>=0.2.40
@@ -41,6 +40,6 @@ json-repair>=0.25.0
 
 # FinBERT sentiment (Feature 2) — CPU-only torch
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.0.0
-transformers>=4.40.0
+torch>=2.0.0,<2.4.0
+transformers>=4.40.0,<4.45.0
 

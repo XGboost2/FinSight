@@ -47,7 +47,7 @@ from models.schemas import (
     SourceChunk,
     YoYDiffResponse,
 )
-from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve
+from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve, retrieve_multi as rag_retrieve_multi
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
@@ -662,7 +662,26 @@ async def chat(
                 history_len=len(history) // 2,
             )
 
-    # ── RAG retrieval ─────────────────────────────────────────────────
+    # ── Collect all filing IDs: 10-K (primary) + 10-Q ────────────────
+    ten_q_ids = [
+        r["filing_id"] for r in list_ingested(redis, "10-Q")
+        if r.get("ticker", "").upper() == ticker.upper()
+    ]
+    all_filing_ids = [filing_id] + ten_q_ids
+
+    # ── 8-K events from Redis (not in Qdrant — injected as text block) ─
+    events_block = ""
+    raw_events = redis.get(f"finsight:events:8-K:{ticker.upper()}")
+    if raw_events:
+        events = json.loads(raw_events)[-10:]
+        if events:
+            events_block = "\n\nRECENT MATERIAL EVENTS (8-K filings):\n" + "\n".join(
+                f"- [{e.get('filed_date', '')}] {e.get('event_type', '').upper()}: "
+                f"{e.get('summary', e.get('headline', ''))[:200]}"
+                for e in events
+            )
+
+    # ── RAG retrieval across all filings ─────────────────────────────
     section_queries = {
         "outlook": "management discussion analysis future outlook guidance strategy",
         "risk":    "risk factors material risks regulatory competition",
@@ -670,6 +689,8 @@ async def chat(
         "future":  "management discussion analysis future outlook guidance strategy",
         "plan":    "management discussion analysis strategy future plans",
         "expect":  "management discussion analysis outlook expectations guidance",
+        "quarter": "quarterly results revenue earnings operating income",
+        "recent":  "quarterly results recent performance latest quarter",
     }
     extra_query = next(
         (v for k, v in section_queries.items() if k in request_body.question.lower()), None
@@ -677,15 +698,16 @@ async def chat(
 
     seen: set = set()
     relevant_chunks = []
+    retriever = rag_retrieve_multi if len(all_filing_ids) > 1 else lambda q, ids, **kw: rag_retrieve(q, ids[0], **kw)
     for q in ([request_body.question] + ([extra_query] if extra_query else [])):
-        for c in rag_retrieve(q, filing_id, top_k=5):
+        for c in retriever(q, all_filing_ids, top_k=5):
             if c["chunk_index"] not in seen:
                 seen.add(c["chunk_index"])
                 relevant_chunks.append(c)
 
     context = "\n\n---\n\n".join(
         f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks
-    )
+    ) + events_block
 
     # ── Load conversation history ─────────────────────────────────────
     history = get_chat_history(redis, sid, ticker) if sid else []
@@ -748,7 +770,7 @@ async def submit_feedback(body: FeedbackRequest) -> dict:
         return {"ok": True, "scored": False}
 
     try:
-        client.score(
+        client.create_score(
             trace_id=body.trace_id,
             name="user_feedback",
             value=1.0 if body.helpful else 0.0,

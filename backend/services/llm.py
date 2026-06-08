@@ -13,20 +13,17 @@ from config import get_settings
 from cache.cost_tracker import record_cost
 
 try:
-    from langfuse.decorators import observe, langfuse_context
-    _LANGFUSE_AVAILABLE = True
+    from langfuse import observe, get_client as _lf
 except ImportError:
-    _LANGFUSE_AVAILABLE = False
     def observe(*args, **kwargs):        # type: ignore
         def decorator(fn): return fn
         return decorator if args and callable(args[0]) else decorator
-    class langfuse_context:             # type: ignore
-        @staticmethod
-        def update_current_observation(**_): pass
-        @staticmethod
-        def update_current_trace(**_): pass
-        @staticmethod
-        def get_current_trace_id() -> str | None: return None
+    class _LfStub:                       # type: ignore
+        def update_current_span(self, **_): pass
+        def update_current_generation(self, **_): pass
+        def get_current_trace_id(self) -> str | None: return None
+    _stub = _LfStub()
+    def _lf(): return _stub              # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +115,9 @@ async def ask_llm(
     Returns:
         {answer, model_used, tokens_in, tokens_out, cost_usd, latency_ms}
     """
-    langfuse_context.update_current_trace(
+    _lf().update_current_span(
         name=f"chat/{ticker}" if ticker else "chat",
-        user_id=ticker,
-        tags=["chat"],
-        metadata={"ticker": ticker},
+        metadata={"ticker": ticker, "tags": "chat"},
     )
     settings = get_settings()
     start = time.perf_counter()
@@ -187,16 +182,16 @@ Question: {query}"""
     except Exception:
         pass
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_generation(
         name=f"ask-llm/{result['model_used']}",
         model=result["model_used"],
         input=user_message,
         output=result["answer"],
-        usage={"input": result["tokens_in"], "output": result["tokens_out"], "unit": "TOKENS"},
+        usage_details={"input": result["tokens_in"], "output": result["tokens_out"]},
         metadata={"cost_usd": result["cost_usd"], "latency_ms": result["latency_ms"], "query_len": len(query)},
     )
 
-    result["trace_id"] = langfuse_context.get_current_trace_id()
+    result["trace_id"] = _lf().get_current_trace_id()
     return result
 
 
@@ -273,12 +268,12 @@ async def call_llm_raw(
     except Exception:
         pass
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_generation(
         name=f"call-llm-raw/{m}",
         model=m,
         input={"prompt_preview": prompt[:500], "prompt_chars": len(prompt)},
         output=text[:2000],
-        usage={"input": tok_in, "output": tok_out, "unit": "TOKENS"},
+        usage_details={"input": tok_in, "output": tok_out},
         metadata={"cost_usd": _calc_cost(m, tok_in, tok_out), "max_tokens": max_tokens},
     )
 

@@ -39,7 +39,7 @@ block the pipeline — the debate agents get empty defaults.
 Checkpoint resumption:
   Each run is keyed by thread_id = "finsight:{ticker}:{filing_id}".
   If the pipeline crashes mid-run (e.g. LLM timeout), the next call with the
-  same ticker+filing resumes from the last completed node via AsyncRedisSaver.
+  same ticker+filing resumes from the last completed node via MemorySaver.
   refresh=True uses a UUID-suffixed thread_id to guarantee a clean run.
 """
 
@@ -77,26 +77,21 @@ _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 
 async def _get_checkpointer():
-    """Singleton AsyncRedisSaver — created once, reused for all graph invocations."""
+    """Singleton MemorySaver checkpointer.
+
+    AsyncRedisSaver is incompatible with langgraph-checkpoint 4.x (JsonPlusRedisSerializer
+    missing _encode_constructor_args) and cannot serialize Pydantic model state fields.
+    MemorySaver stores Python objects directly — no serialization, works with all types.
+    """
     global _checkpointer
     if _checkpointer is not None:
         return _checkpointer
     async with _checkpointer_lock:
         if _checkpointer is not None:
             return _checkpointer
-        try:
-            from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-            from config import get_settings
-
-            saver = AsyncRedisSaver(get_settings().REDIS_URL)
-            await saver.asetup()
-            _checkpointer = saver
-            logger.info("LangGraph AsyncRedisSaver initialised")
-        except Exception as e:
-            logger.warning(
-                "Checkpoint Redis unavailable (%s) — pipeline runs without crash recovery", e
-            )
-            _checkpointer = None  # explicitly mark as failed so we don't retry every call
+        from langgraph.checkpoint.memory import MemorySaver
+        _checkpointer = MemorySaver()
+        logger.info("LangGraph MemorySaver checkpointer initialised")
     return _checkpointer
 
 

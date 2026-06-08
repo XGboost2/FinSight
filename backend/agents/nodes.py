@@ -39,14 +39,15 @@ from agents.contracts import (
 from agents.state import AnalysisState
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    from langfuse import observe, get_client as _lf
 except ImportError:
     def observe(*args, **kwargs):
         def decorator(fn): return fn
         return decorator if args and callable(args[0]) else decorator
-    class langfuse_context:
-        @staticmethod
-        def update_current_observation(**_): pass
+    class _LfStub:                  # type: ignore
+        def update_current_span(self, **_): pass
+    _stub = _LfStub()
+    def _lf(): return _stub         # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def node_fundamentals(state: AnalysisState) -> dict:
     filing_id = state["filing_id"]
     cik       = (state.get("company_info") or {}).get("cik")
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_fundamentals/{ticker}",
         input={"ticker": ticker, "filing_id": filing_id},
     )
@@ -80,7 +81,7 @@ async def node_fundamentals(state: AnalysisState) -> dict:
         # Fallback: plain service calls (existing behaviour)
         output = await _fallback_fundamentals(ticker, filing_id, cik, errors)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"chunks": len(output.chunks), "xbrl_revenue": output.xbrl.revenue_latest_year},
     )
     return {"fundamentals": output, "errors": errors}
@@ -120,7 +121,7 @@ async def node_risk(state: AnalysisState) -> dict:
     ticker    = state["ticker"]
     filing_id = state["filing_id"]
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_risk/{ticker}",
         input={"ticker": ticker, "filing_id": filing_id},
     )
@@ -140,7 +141,7 @@ async def node_risk(state: AnalysisState) -> dict:
         logger.warning("[risk] agent failed for %s: %s — falling back", ticker, e)
         output = await _fallback_risk(ticker, filing_id, errors)
 
-    langfuse_context.update_current_observation(output={"chunks": len(output.chunks)})
+    _lf().update_current_span(output={"chunks": len(output.chunks)})
     return {"risk": output, "errors": errors}
 
 
@@ -169,7 +170,7 @@ async def node_sentiment(state: AnalysisState) -> dict:
     ticker    = state["ticker"]
     filing_id = state["filing_id"]
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_sentiment/{ticker}",
         input={"ticker": ticker},
     )
@@ -188,7 +189,7 @@ async def node_sentiment(state: AnalysisState) -> dict:
         errors.append(f"sentiment: {e}")
         logger.warning("[sentiment] failed for %s: %s", ticker, e)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"score": output.score, "label": output.label},
     )
     return {"sentiment": output, "errors": errors}
@@ -200,7 +201,7 @@ async def node_sentiment(state: AnalysisState) -> dict:
 async def node_news(state: AnalysisState) -> dict:
     ticker = state["ticker"]
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_news/{ticker}",
         input={"ticker": ticker},
     )
@@ -243,7 +244,7 @@ async def node_news(state: AnalysisState) -> dict:
         items=items, sentiment_counts=sentiment_counts,
         summary=summary, events=events,
     )
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"news_items": len(items), "events": len(events)},
     )
     return {"news": output, "errors": errors}
@@ -255,7 +256,7 @@ async def node_news(state: AnalysisState) -> dict:
 async def node_technical(state: AnalysisState) -> dict:
     ticker = state["ticker"]
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_technical/{ticker}",
         input={"ticker": ticker},
     )
@@ -281,7 +282,7 @@ async def node_technical(state: AnalysisState) -> dict:
         errors.append(f"technical: {e}")
         logger.warning("[technical] failed for %s: %s", ticker, e)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"overall_signal": output.overall_signal, "rsi": output.rsi},
     )
     return {"technical": output, "errors": errors}
@@ -294,7 +295,7 @@ async def node_bull(state: AnalysisState) -> dict:
     ticker       = state["ticker"]
     company_info = state.get("company_info") or {}
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_bull/{ticker}",
         input={"ticker": ticker},
     )
@@ -318,7 +319,7 @@ async def node_bull(state: AnalysisState) -> dict:
     )
 
     bull_case = await run_bull_agent(deps)
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"points": len(bull_case.points), "catalyst": bool(bull_case.key_catalyst)},
     )
     return {"bull_case": bull_case, "errors": []}
@@ -331,7 +332,7 @@ async def node_bear(state: AnalysisState) -> dict:
     ticker       = state["ticker"]
     company_info = state.get("company_info") or {}
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_bear/{ticker}",
         input={"ticker": ticker},
     )
@@ -357,7 +358,7 @@ async def node_bear(state: AnalysisState) -> dict:
     )
 
     bear_case = await run_bear_agent(deps)
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"points": len(bear_case.points), "key_risk": bool(bear_case.key_risk)},
     )
     return {"bear_case": bear_case, "errors": []}
@@ -374,7 +375,7 @@ async def node_report(state: AnalysisState) -> dict:
     ticker       = state["ticker"]
     company_info = state.get("company_info") or {}
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_report/{ticker}",
         input={"ticker": ticker},
     )
@@ -436,7 +437,7 @@ async def node_report(state: AnalysisState) -> dict:
             "[report] agent done: %s latency=%.0fms",
             ticker, (time.perf_counter() - start) * 1000,
         )
-        langfuse_context.update_current_observation(
+        _lf().update_current_span(
             output={"verdict": bool(report.verdict), "pipeline": "pydantic-ai"},
         )
         return {"report": report, "errors": []}
@@ -565,7 +566,7 @@ async def node_portfolio(state: AnalysisState) -> dict:
     ticker       = state["ticker"]
     company_info = state.get("company_info") or {}
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_portfolio/{ticker}",
         input={"ticker": ticker},
     )
@@ -593,7 +594,7 @@ async def node_portfolio(state: AnalysisState) -> dict:
     )
 
     signal = await run_portfolio_agent(deps)
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"signal": signal.signal, "confidence": signal.confidence},
     )
     return {"portfolio_signal": signal, "errors": []}
@@ -606,7 +607,7 @@ async def node_judge(state: AnalysisState) -> dict:
     ticker = state["ticker"]
     report = state.get("report")
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name=f"node_judge/{ticker}",
         input={"ticker": ticker},
     )
@@ -617,7 +618,7 @@ async def node_judge(state: AnalysisState) -> dict:
     from services.judge import evaluate_report
     judge = await evaluate_report(report)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         output={"overall": judge.overall, "model": judge.model},
     )
     return {"judge": judge, "errors": []}

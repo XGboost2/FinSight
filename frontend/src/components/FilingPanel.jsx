@@ -8,6 +8,8 @@ const SAMPLE_QUESTIONS = [
   'What are the main risk factors?',
   'Summarise the revenue and earnings trend.',
   'What does management say about future outlook?',
+  'What happened in the most recent quarter?',
+  'Are there any recent material events or announcements?',
 ]
 
 const MODELS = [
@@ -78,19 +80,19 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     <div className="filing-panel glass-card">
       <div className="panel-header">
         <FileText size={18} />
-        <h2>10-K Filing</h2>
+        <h2>SEC Filings</h2>
       </div>
 
       {!ticker && (
         <p className="panel-empty">
-          Search for a company to load its latest SEC 10-K filing and chat with it.
+          Search for a company to load its SEC filings (10-K, 10-Q, 8-K) and chat with them.
         </p>
       )}
 
       {fetchingFiling && (
         <div className="filing-loading">
           <Loader size={16} className="spin" />
-          <span>Fetching SEC EDGAR 10-K for <strong>{ticker}</strong>…</span>
+          <span>Fetching SEC EDGAR filings for <strong>{ticker}</strong>…</span>
         </div>
       )}
 
@@ -115,7 +117,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
           <div className="chat-area">
             <div className="chat-label">
               <MessageCircle size={14} />
-              <span>Ask the filing</span>
+              <span>Ask the filings</span>
             </div>
 
             {history.length === 0 && (
@@ -164,7 +166,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
                 type="text"
                 value={question}
                 onChange={e => setQuestion(e.target.value)}
-                placeholder="Ask a question about this 10-K…"
+                placeholder="Ask about 10-K, 10-Q, or 8-K filings…"
                 disabled={chatLoading}
                 className="chat-input"
               />

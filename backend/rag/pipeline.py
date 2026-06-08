@@ -42,16 +42,15 @@ def _detect_section(question: str) -> list[str] | None:
     return None
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    from langfuse import observe, get_client as _lf
 except ImportError:
     def observe(*args, **kwargs):       # type: ignore
         def decorator(fn): return fn
         return decorator if args and callable(args[0]) else decorator
-    class langfuse_context:             # type: ignore
-        @staticmethod
-        def update_current_observation(**_): pass
-        @staticmethod
-        def update_current_trace(**_): pass
+    class _LfStub:                      # type: ignore
+        def update_current_span(self, **_): pass
+    _stub = _LfStub()
+    def _lf(): return _stub             # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,7 @@ def ingest(filing_id: str, chunks: list[dict]) -> int:
     sparse_vectors = [sparse_encode(t) for t in texts]
     upsert_chunks(filing_id, chunks, embeddings, sparse_vectors)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name="rag-ingest",
         input={"filing_id": filing_id, "chunk_count": len(chunks)},
         output={"chunks_stored": len(chunks)},
@@ -95,7 +94,7 @@ def retrieve(question: str, filing_id: str, top_k: int = 5) -> list[dict]:
     )
     chunks = rerank(question, candidates, top_k=effective_top_k)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name="rag-retrieve",
         input=question,
         output=str([c["text"][:100] for c in chunks]),
@@ -133,7 +132,7 @@ def retrieve_multi(question: str, filing_ids: list[str], top_k: int = 5) -> list
     )
     chunks = rerank(question, candidates, top_k=effective_top_k)
 
-    langfuse_context.update_current_observation(
+    _lf().update_current_span(
         name="rag-retrieve-multi",
         input=question,
         output=str([c["text"][:100] for c in chunks]),

@@ -12,12 +12,13 @@ from agents.contracts import JudgeOutput, ReportOutput
 from services.llm import call_llm_raw, CHEAP_MODEL
 
 try:
-    from langfuse.decorators import langfuse_context
+    from langfuse import get_client as _lf
 except ImportError:
-    class langfuse_context:  # type: ignore
-        @staticmethod
-        def get_current_trace_id() -> str | None:
-            return None
+    class _LfStub:  # type: ignore
+        def get_current_trace_id(self) -> str | None: return None
+        def create_score(self, **_): pass
+    _stub = _LfStub()
+    def _lf(): return _stub  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def _push_scores(ticker: str, judge: JudgeOutput) -> None:
     if not client:
         return
 
-    trace_id = langfuse_context.get_current_trace_id()
+    trace_id = _lf().get_current_trace_id()
     if not trace_id:
         logger.debug("judge: no active Langfuse trace — scores not pushed")
         return
@@ -126,7 +127,7 @@ def _push_scores(ticker: str, judge: JudgeOutput) -> None:
     }
     for name, value in dimensions.items():
         try:
-            client.score(
+            client.create_score(
                 trace_id=trace_id,
                 name=name,
                 value=value,

@@ -33,7 +33,7 @@ _KIMI_MODEL    = "kimi-k2.6"
 
 def _make_model(primary: bool = True):
     from config import get_settings
-    from pydantic_ai.models.openai import OpenAIModel
+    from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
     settings = get_settings()
@@ -43,13 +43,13 @@ def _make_model(primary: bool = True):
         if not base.endswith("/v1"):
             base = base.rstrip("/") + "/v1"
         provider = OpenAIProvider(base_url=base, api_key=settings.DEEPSEEK_API_KEY)
-        return OpenAIModel(_DEEPSEEK_CHAT, provider=provider)
+        return OpenAIChatModel(_DEEPSEEK_CHAT, provider=provider)
 
     provider = OpenAIProvider(
         base_url=settings.KIMI_BASE_URL or "https://api.moonshot.ai/v1",
         api_key=settings.KIMI_API_KEY or "no-key",
     )
-    return OpenAIModel(_KIMI_MODEL, provider=provider)
+    return OpenAIChatModel(_KIMI_MODEL, provider=provider)
 
 
 # Kept for type compatibility with nodes.py DebateDeps construction
