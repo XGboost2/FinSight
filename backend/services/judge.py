@@ -76,11 +76,26 @@ async def evaluate_report(report: ReportOutput | dict) -> JudgeOutput:
 
     try:
         raw, tok_in, tok_out, model_used = await call_llm_raw(
-            prompt, max_tokens=300, model=CHEAP_MODEL
+            prompt, max_tokens=600, model=CHEAP_MODEL
         )
         raw = raw.strip()
         if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+            inner = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            raw = inner if inner else raw  # guard against empty fence
+
+        if not raw:
+            logger.warning("judge: %s returned empty response — trying DeepSeek fallback", model_used)
+            from services.llm import CHEAP_FALLBACK
+            raw, tok_in, tok_out, model_used = await call_llm_raw(
+                prompt, max_tokens=600, model=CHEAP_FALLBACK
+            )
+            raw = raw.strip()
+            if raw.startswith("```"):
+                inner = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                raw = inner if inner else raw
+
+        if not raw:
+            raise ValueError("all providers returned empty response for judge prompt")
 
         data = json.loads(raw)
         result = JudgeOutput(
