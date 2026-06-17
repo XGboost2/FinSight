@@ -13,6 +13,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=http://qdrant:6333
+      - NEO4J_URI=bolt://neo4j:7687
       - REDIS_URL=redis://:${REDIS_PASSWORD:-finsight_dev}@redis:6379
       - HF_HOME=/root/.cache/huggingface
       - FASTEMBED_CACHE_PATH=/root/.cache/fastembed
@@ -21,6 +22,7 @@ services:
     depends_on:
       - qdrant
       - redis
+      - neo4j
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -56,6 +58,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
       - QDRANT_URL=http://qdrant:6333
+      - NEO4J_URI=bolt://neo4j:7687
       - REDIS_URL=redis://:${REDIS_PASSWORD:-finsight_dev}@redis:6379
       - HF_HOME=/root/.cache/huggingface
       - FASTEMBED_CACHE_PATH=/root/.cache/fastembed
@@ -64,6 +67,7 @@ services:
     depends_on:
       - redis
       - qdrant
+      - neo4j
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -96,8 +100,28 @@ services:
       timeout: 5s
       retries: 3
 
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-finsight-neo4j}
+      - NEO4J_dbms_security_auth__enabled=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-finsight-neo4j} 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
 volumes:
   qdrant_data:
   redis_data:
+  neo4j_data:
+  neo4j_logs:
   fastembed_cache:
   hf_cache:

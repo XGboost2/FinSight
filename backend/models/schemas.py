@@ -50,6 +50,7 @@ class FilingListResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     ticker: str = Field(..., min_length=1, max_length=10)
+    filing_id: str | None = None  # optional explicit filing/upload to chat against
     model: str | None = None     # None = auto-route
     include_context: bool = False  # set True to get full chunk text (eval only)
     session_id: str | None = None  # omit for sessionless (eval / direct API)
@@ -100,6 +101,19 @@ class IngestResponse(BaseModel):
     already_existed: bool
     company_name: str = ""
     filed_date: str = ""
+
+
+class DocumentIngestResponse(BaseModel):
+    ticker: str
+    filing_id: str
+    filing_type: str
+    filename: str
+    chunk_count: int
+    char_count: int
+    company_name: str = ""
+    filed_date: str = ""
+    source: str = "markitdown"
+    retrieval: str = "neo4j_vectorless_graph"
 
 
 # === Dashboard (Day 15) ===

@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import hashlib
+from datetime import datetime, timezone
 from contextlib import contextmanager, nullcontext
 
 try:
@@ -16,7 +18,7 @@ except ImportError:
     def _lf_propagate(**_):  # type: ignore
         yield
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.security import APIKeyHeader
 from limiter import limiter
 
@@ -30,6 +32,11 @@ from cache.filing_registry import (
 from cache.redis_client import get_redis
 from cache.ticker_cache import get_ticker_info, load_tickers_into_redis, search_tickers
 from ingestion.chunker import chunk_text
+from ingestion.document_converter import (
+    DocumentConversionError,
+    DocumentConversionUnavailable,
+    convert_document_bytes,
+)
 from ingestion.edgar import fetch_and_extract
 from models.schemas import (
     AnalysisReport,
@@ -43,6 +50,7 @@ from models.schemas import (
     ChangedParagraph,
     CompareResponse,
     DashboardResponse,
+    DocumentIngestResponse,
     FetchFilingRequest,
     FilingInfo,
     FilingListResponse,
@@ -56,6 +64,7 @@ from models.schemas import (
     YoYDiffResponse,
 )
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve, retrieve_multi as rag_retrieve_multi
+from rag.graph_store import graph_exists, ingest_graph_document, retrieve_graph
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
@@ -78,6 +87,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["FinSight"])
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+_FILING_ID_RE = re.compile(r"^[A-Za-z0-9._\-:]{1,80}$")
 
 
 def _validate_ticker(ticker: str) -> str:
@@ -85,6 +95,13 @@ def _validate_ticker(ticker: str) -> str:
     if not _TICKER_RE.match(t):
         raise HTTPException(400, "Invalid ticker format")
     return t
+
+
+def _validate_filing_id(filing_id: str) -> str:
+    fid = filing_id.strip()
+    if not _FILING_ID_RE.match(fid):
+        raise HTTPException(400, "Invalid filing_id format")
+    return fid
 
 
 
@@ -244,6 +261,95 @@ async def ingest_status(ticker: str, task_id: str):
         return {"ticker": ticker, "task_id": task_id, "status": "running", "step": meta.get("step", "")}
 
     return {"ticker": ticker, "task_id": task_id, "status": state.lower()}
+
+
+_FILING_TYPE_RE = re.compile(r"^[A-Z0-9][A-Z0-9._\-]{0,30}$")
+
+
+def _validate_filing_type(filing_type: str) -> str:
+    ft = filing_type.strip().upper()
+    if not _FILING_TYPE_RE.match(ft):
+        raise HTTPException(400, "Invalid filing_type format")
+    return ft
+
+
+@router.post("/documents/ingest", response_model=DocumentIngestResponse)
+@limiter.limit("3/minute")
+async def ingest_document(
+    request: Request,
+    file: UploadFile = File(...),
+    ticker: str = Form(...),
+    filing_type: str = Form(default="CUSTOM-DOC"),
+    company_name: str = Form(default=""),
+    filed_date: str = Form(default=""),
+) -> DocumentIngestResponse:
+    """Convert an uploaded document with MarkItDown and ingest it into RAG.
+
+    Use filing_type=10-K, 10-Q, or 8-K when the uploaded document represents one
+    of those SEC forms. Other uploads can use CUSTOM-DOC.
+    """
+    ticker = _validate_ticker(ticker)
+    filing_type = _validate_filing_type(filing_type)
+    filed_date = filed_date.strip() or datetime.now(timezone.utc).date().isoformat()
+    settings = get_settings()
+
+    content = await file.read()
+    if len(content) > settings.DOCUMENT_UPLOAD_MAX_BYTES:
+        raise HTTPException(413, f"File too large. Max size is {settings.DOCUMENT_UPLOAD_MAX_BYTES} bytes.")
+
+    try:
+        converted = convert_document_bytes(file.filename or "document", content)
+    except DocumentConversionUnavailable as e:
+        raise HTTPException(503, str(e)) from e
+    except DocumentConversionError as e:
+        raise HTTPException(422, str(e)) from e
+
+    digest = hashlib.sha256(
+        f"{ticker}:{filing_type}:{file.filename}:{converted.text[:500]}".encode()
+    ).hexdigest()[:12]
+    filing_id = f"upload-{digest}"
+
+    chunks = chunk_text(converted.text, chunk_size=1000, chunk_overlap=200, source_id=filing_id)
+    if not chunks:
+        raise HTTPException(422, "Converted document produced no chunks")
+
+    metadata = {
+        "id": filing_id,
+        "ticker": ticker,
+        "company_name": company_name,
+        "filing_type": filing_type,
+        "filed_date": filed_date,
+        "filename": converted.filename,
+        "source": "markitdown",
+        "text": converted.text,
+    }
+
+    redis = get_redis()
+    store_filing(filing_id, metadata, chunks)
+    ingest_graph_document(redis, filing_id, metadata, chunks)
+    register_filing(redis, ticker, filing_id, {
+        "filed_date": filed_date,
+        "chunk_count": len(chunks),
+        "filename": converted.filename,
+        "source": "markitdown",
+        "retrieval": "neo4j_vectorless_graph",
+    }, filing_type=filing_type)
+
+    logger.info(
+        "Document ingested via MarkItDown graph RAG: ticker=%s filing_type=%s filename=%s chunks=%d",
+        ticker, filing_type, converted.filename, len(chunks),
+    )
+    return DocumentIngestResponse(
+        ticker=ticker,
+        filing_id=filing_id,
+        filing_type=filing_type,
+        filename=converted.filename,
+        chunk_count=len(chunks),
+        char_count=converted.chars,
+        company_name=company_name,
+        filed_date=filed_date,
+        retrieval="neo4j_vectorless_graph",
+    )
 
 
 @router.get("/companies/{ticker}/events")
@@ -646,18 +752,22 @@ async def chat(
     logger.info("Chat request: ticker=%s session=%s question=%r",
                 ticker, sid or "none", request_body.question[:80])
 
-    if not is_ingested(redis, ticker):
-        raise HTTPException(404, f"No filing for '{ticker}'. Ingest first.")
-
-    record = get_filing_record(redis, ticker)
-    filing_id = record["filing_id"]
+    explicit_filing_id = _validate_filing_id(request_body.filing_id) if request_body.filing_id else None
+    if explicit_filing_id:
+        filing_id = explicit_filing_id
+    else:
+        if not is_ingested(redis, ticker):
+            raise HTTPException(404, f"No filing for '{ticker}'. Ingest first.")
+        record = get_filing_record(redis, ticker)
+        filing_id = record["filing_id"]
+    cache_scope = f"{ticker}:{filing_id}" if explicit_filing_id else ticker
 
     # ── Session answer cache hit ──────────────────────────────────────
     if sid:
-        cached = get_cached_answer(redis, sid, ticker, request_body.question)
+        cached = get_cached_answer(redis, sid, cache_scope, request_body.question)
         if cached:
             logger.info("Chat cache hit: session=%s ticker=%s", sid, ticker)
-            history = get_chat_history(redis, sid, ticker)
+            history = get_chat_history(redis, sid, cache_scope)
             return ChatResponse(
                 answer=cached,
                 sources=[],
@@ -671,11 +781,14 @@ async def chat(
             )
 
     # ── Collect all filing IDs: 10-K (primary) + 10-Q ────────────────
-    ten_q_ids = [
-        r["filing_id"] for r in list_ingested(redis, "10-Q")
-        if r.get("ticker", "").upper() == ticker.upper()
-    ]
-    all_filing_ids = [filing_id] + ten_q_ids
+    if explicit_filing_id:
+        all_filing_ids = [filing_id]
+    else:
+        ten_q_ids = [
+            r["filing_id"] for r in list_ingested(redis, "10-Q")
+            if r.get("ticker", "").upper() == ticker.upper()
+        ]
+        all_filing_ids = [filing_id] + ten_q_ids
 
     # ── 8-K events from Redis (not in Qdrant — injected as text block) ─
     events_block = ""
@@ -706,19 +819,29 @@ async def chat(
 
     seen: set = set()
     relevant_chunks = []
-    retriever = rag_retrieve_multi if len(all_filing_ids) > 1 else lambda q, ids, **kw: rag_retrieve(q, ids[0], **kw)
-    for q in ([request_body.question] + ([extra_query] if extra_query else [])):
-        for c in retriever(q, all_filing_ids, top_k=5):
-            if c["chunk_index"] not in seen:
-                seen.add(c["chunk_index"])
-                relevant_chunks.append(c)
+    graph_mode = explicit_filing_id and graph_exists(redis, filing_id)
+    if graph_mode:
+        for q in ([request_body.question] + ([extra_query] if extra_query else [])):
+            for c in retrieve_graph(redis, filing_id, q, top_k=5):
+                chunk_key = (c.get("filing_id", ""), c["chunk_index"])
+                if chunk_key not in seen:
+                    seen.add(chunk_key)
+                    relevant_chunks.append(c)
+    else:
+        retriever = rag_retrieve_multi if len(all_filing_ids) > 1 else lambda q, ids, **kw: rag_retrieve(q, ids[0], **kw)
+        for q in ([request_body.question] + ([extra_query] if extra_query else [])):
+            for c in retriever(q, all_filing_ids, top_k=5):
+                chunk_key = (c.get("filing_id", ""), c["chunk_index"])
+                if chunk_key not in seen:
+                    seen.add(chunk_key)
+                    relevant_chunks.append(c)
 
     context = "\n\n---\n\n".join(
         f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks
     ) + events_block
 
     # ── Load conversation history ─────────────────────────────────────
-    history = get_chat_history(redis, sid, ticker) if sid else []
+    history = get_chat_history(redis, sid, cache_scope) if sid else []
 
     # ── LLM call with history ─────────────────────────────────────────
     try:
@@ -745,8 +868,8 @@ async def chat(
 
     # ── Persist to session ────────────────────────────────────────────
     if sid:
-        append_chat_turn(redis, sid, ticker, request_body.question, llm_result["answer"])
-        set_cached_answer(redis, sid, ticker, request_body.question, llm_result["answer"])
+        append_chat_turn(redis, sid, cache_scope, request_body.question, llm_result["answer"])
+        set_cached_answer(redis, sid, cache_scope, request_body.question, llm_result["answer"])
 
     sources = [
         SourceChunk(chunk_index=c["chunk_index"], text_preview=c["text"][:200])
@@ -819,5 +942,3 @@ async def health() -> HealthResponse:
         redis_ok=redis_ok,
         qdrant_ok=qdrant_ok,
     )
-
-

@@ -1,14 +1,16 @@
 # FinSight AI
 
-**Financial Risk Intelligence Platform** — ingests SEC EDGAR 10-K, 10-Q, and 8-K filings, stores them as hybrid vector embeddings, and delivers multi-tab AI-powered fundamental analysis grounded in source documents.
+**Financial Risk Intelligence Platform** — ingests SEC EDGAR 10-K, 10-Q, and 8-K filings, supports user-uploaded business documents, stores filings across vector and graph retrieval layers, and delivers AI-powered fundamental analysis grounded in source documents.
 
-Built as a portfolio project demonstrating production-grade AI engineering: LangGraph multi-agent pipeline with Pydantic AI typed contracts, section-aware RAG with cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, DeepEval evaluation baseline, multi-provider LLM routing with cost tracking, and a fully reactive analyst UI.
+Built as a portfolio project demonstrating production-grade AI engineering: LangGraph multi-agent pipeline with Pydantic AI typed contracts, dual RAG retrieval (Qdrant vector RAG + PageIndex-style vectorless retrieval), Neo4j graph RAG for uploaded documents, MarkItDown multi-format document conversion, cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, DeepEval evaluation baseline, multi-provider LLM routing with cost tracking, and a fully reactive analyst UI.
 
 ---
 
 ## What It Does
 
 Search any SEC-registered company → FinSight fetches its latest filings from EDGAR, embeds them into a hybrid vector store, and generates a comprehensive equity research report in the style of a professional analyst note — with risk scoring, sentiment analysis, YoY risk diff, technical indicators, and a bull/bear debate transcript.
+
+Upload a custom document → FinSight converts it with Microsoft MarkItDown, chunks it, stores it in Neo4j as a `Document → Section → Chunk` graph, and lets the chat endpoint answer against that uploaded document through a vectorless graph RAG path.
 
 ---
 
@@ -22,6 +24,7 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 | **8-K Event Classification** | Classifies 8-K filings by EDGAR item number (`2.02` → Earnings, `5.02` → Leadership Change, `1.01` → Acquisition, etc.) — deterministic, zero LLM cost |
 | **XBRL Financial Parser** | Revenue, net income, gross margin, YoY growth pulled directly from SEC EDGAR XBRL API — exact numbers, no LLM extraction |
 | **Paragraph-Aware Chunker** | 1000-char chunks with 200-char overlap across 10-K sections. Preserves paragraph boundaries to prevent context loss at chunk edges |
+| **MarkItDown Upload Conversion** | `POST /api/documents/ingest` accepts uploaded business documents, converts them to Markdown-like text with Microsoft MarkItDown, chunks the result, and registers the file as a chat-ready document |
 
 ### RAG Pipeline
 | Feature | Detail |
@@ -31,6 +34,9 @@ Search any SEC-registered company → FinSight fetches its latest filings from E
 | **Cross-Encoder Reranker** | `BAAI/bge-reranker-base` (280MB ONNX, CPU) rescores top-20 RRF candidates for true relevance. Catches cases where similarity ≠ relevance — e.g. "supply chain risks" → "Geographic Concentration Risk" section |
 | **Cross-Filing Retrieval** | RAG search across 10-K + 10-Q simultaneously via Qdrant `MatchAny` filter. Enables quarterly trend questions over annual filings |
 | **Multi-Query Retrieval** | Chat endpoint issues both the original question and section-targeted rephrasing to improve recall on topic-specific queries |
+| **Fusion Retrieval Mode** | Optional `RETRIEVAL_MODE=fusion` combines vector RAG with PageIndex-style vectorless section retrieval, dedupes candidates by filing/chunk, then reranks the final set |
+| **LLM Section Reasoner** | Uses `CHEAP_MODEL` to infer likely filing sections for a question, caches decisions in Redis, and falls back to deterministic regex routing if the LLM helper fails |
+| **Neo4j Graph RAG** | Uploaded documents are stored locally in Neo4j as `Document → Section → Chunk` and retrieved through lexical + section-aware vectorless scoring. Useful for explainable graph-backed RAG demos |
 
 ### AI Analysis
 | Feature | Detail |
@@ -98,6 +104,7 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       │
       ├── ingestion/
       │     edgar.py                 ← SEC EDGAR 10-K / 10-Q / 8-K (rate-limited 0.12s)
+      │     document_converter.py    ← MarkItDown conversion for uploaded PDFs, Office files, HTML, CSV, JSON, XML, text, etc.
       │     chunker.py               ← paragraph-aware chunking (1000 char / 200 overlap)
       │     xbrl.py                  ← XBRL financial facts (revenue, income, margin, YoY)
       │     sections.py              ← 10-K section extractor (Item 1, 1A, 7, 8)
@@ -106,8 +113,9 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       ├── rag/
       │     embedder.py              ← fastembed + BAAI/bge-base-en-v1.5 (ONNX, CPU, 768-dim)
       │     retriever.py             ← Qdrant hybrid search (dense + sparse, RRF fusion)
-      │     pipeline.py              ← ingest / retrieve / retrieve_multi (with reranking)
+      │     pipeline.py              ← ingest / retrieve / retrieve_multi + fusion retrieval (with reranking)
       │     reranker.py              ← BAAI/bge-reranker-base cross-encoder (ONNX, CPU)
+      │     graph_store.py           ← Neo4j uploaded-document graph RAG
       │
       ├── services/
       │     edgar_pipeline.py        ← multi-filing pipeline + deterministic 8-K classifier
@@ -140,8 +148,8 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       └── limiter.py                 ← slowapi limiter (Redis-backed, shared across workers)
       │
       ▼              ▼              ▼             ▼
-  Qdrant :6333   Redis DB0      Redis DB1     Flower :5555
-  (vectors)      (app data)     (Celery)      (task monitor)
+  Qdrant :6333   Neo4j :7687    Redis DB0      Redis DB1     Flower :5555
+  (vectors)      (graph RAG)    (app data)     (Celery)      (task monitor)
 ```
 
 ### RAG Retrieval Pipeline
@@ -166,6 +174,47 @@ Top 3 chunks (section-filtered) or top 5 (unfiltered) → LLM context
 ```
 
 Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irrelevant chunks before they reach the LLM.
+
+### Fusion RAG Pipeline
+
+```
+User query
+    ↓
+LLM section reasoner + regex fallback
+    ↓
+Two candidate generators
+  ├── Vector path: Qdrant dense+sparse retrieval
+  └── Vectorless path: PageIndex-style section/chunk retrieval
+    ↓
+Deduplicate by (filing_id, chunk_index)
+    ↓
+Cross-encoder reranker
+    ↓
+Top evidence chunks → LLM context
+```
+
+This mode is controlled with `RETRIEVAL_MODE=fusion`. The default remains `hybrid` so the existing Qdrant path is stable, while the fusion path can be enabled for experiments and demos.
+
+### Uploaded Document Graph RAG
+
+```
+Upload file
+    ↓
+MarkItDown conversion
+    ↓
+Paragraph-aware chunking
+    ↓
+Neo4j graph insert
+  (:Document)-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(:Chunk)
+    ↓
+Chat request with filing_id
+    ↓
+Neo4j vectorless graph retrieval
+    ↓
+LLM grounded answer
+```
+
+Uploaded documents use Neo4j rather than Qdrant embeddings so the project can demonstrate graph-backed RAG with an inspectable local graph database.
 
 ### LLM Routing
 
@@ -197,6 +246,8 @@ Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irre
 | Embeddings | fastembed 0.3.6 + `BAAI/bge-base-en-v1.5` (ONNX, CPU, 768-dim) |
 | Reranker | `BAAI/bge-reranker-base` via fastembed (ONNX, CPU, 280MB) |
 | Vector DB | Qdrant 1.9+ — dense + sparse hybrid, RRF fusion, filing-scoped filters |
+| Graph DB | Neo4j 5 Community — uploaded-document graph RAG, `Document → Section → Chunk` model |
+| Document Conversion | Microsoft MarkItDown — multi-format uploads converted into Markdown-like text for chunking |
 | Sentiment | `ProsusAI/finbert` via HuggingFace transformers (CPU, 110M params) |
 | Agent Orchestration | LangGraph 0.2+ — `StateGraph` fan-out/fan-in parallelism, typed state |
 | Agent Contracts | Pydantic AI (next) — typed tool outputs, `result_type` enforcement |
@@ -210,7 +261,7 @@ Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irre
 | Scheduler | APScheduler 3.10 (daily 02:00 UTC ticker refresh) |
 | JSON Reliability | json-repair + 3-attempt retry for malformed LLM output |
 | Frontend | React 19 + Vite, TradingView Widgets, Lucide icons |
-| Containers | Docker + Docker Compose (6 services) |
+| Containers | Docker + Docker Compose (backend, frontend, worker, Redis, Qdrant, Neo4j, Flower) |
 
 ---
 
@@ -228,8 +279,9 @@ Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irre
 | `GET` | `/api/companies/{ticker}/technicals` | 20/min | RSI, MACD, SMA50/200, Bollinger Bands + LLM verdict |
 | `GET` | `/api/companies/{ticker}/news` | 20/min | Finnhub headlines + FinBERT sentiment |
 | `GET` | `/api/companies/{ticker}/events` | — | Recent 8-K events classified by type |
+| `POST` | `/api/documents/ingest` | 3/min | Upload a custom document. MarkItDown conversion → chunking → Neo4j graph RAG registration |
 | `POST` | `/api/companies/compare` | 10/min | Two-ticker head-to-head with YoY revenue trend |
-| `POST` | `/api/chat` | — | RAG Q&A with optional model override |
+| `POST` | `/api/chat` | — | RAG Q&A with optional model override and optional `filing_id` for uploaded documents |
 | `GET` | `/api/companies/search?q=apple` | 60/min | Company autocomplete from Redis |
 | `GET` | `/api/admin/costs` | — | LLM cost breakdown day/week/month per model |
 | `POST` | `/api/admin/refresh-tickers` | — | Manually refresh ticker cache |
@@ -253,6 +305,7 @@ docker compose up --build
 | Backend API | http://localhost:8000 |
 | Swagger docs | http://localhost:8000/docs |
 | Qdrant dashboard | http://localhost:6333/dashboard |
+| Neo4j browser | http://localhost:7474 |
 | Flower (Celery monitor) | http://localhost:5555 |
 
 ### Local (no Docker)
@@ -270,7 +323,7 @@ cd backend && celery -A celery_app worker --loglevel=info --concurrency=1
 cd frontend && npm install && npm run dev
 
 # Infrastructure (still needs Docker)
-docker compose up qdrant redis
+docker compose up qdrant redis neo4j
 ```
 
 ### Tests
@@ -301,6 +354,21 @@ FINNHUB_API_KEY=...
 QDRANT_URL=http://qdrant:6333
 REDIS_URL=redis://redis:6379
 
+# Neo4j graph RAG for uploaded documents
+NEO4J_URI=bolt://neo4j:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=finsight-neo4j
+NEO4J_DATABASE=neo4j
+
+# Retrieval mode
+# hybrid = existing Qdrant dense+sparse RRF path
+# fusion = Qdrant vector RAG + PageIndex-style vectorless retrieval + reranking
+RETRIEVAL_MODE=hybrid
+SECTION_REASONER_CACHE_TTL_SECONDS=604800
+
+# Uploads
+DOCUMENT_UPLOAD_MAX_BYTES=26214400
+
 # Observability — get keys from Langfuse UI → Settings → API Keys
 # Tracing is a no-op when these are absent (safe to omit in dev)
 LANGFUSE_SECRET_KEY=sk-lf-...
@@ -329,6 +397,7 @@ finsight-ai/
 │   ├── models/schemas.py              ← Pydantic I/O models (AnalysisReport, FindingRow…)
 │   ├── ingestion/
 │   │   ├── edgar.py                   ← SEC EDGAR fetch (rate-limited 0.12s)
+│   │   ├── document_converter.py      ← MarkItDown upload conversion
 │   │   ├── chunker.py                 ← paragraph-aware splitter
 │   │   ├── sections.py                ← 10-K section extractor (Item 1/1A/7/8)
 │   │   ├── xbrl.py                    ← XBRL financials + YoY trend
@@ -336,7 +405,8 @@ finsight-ai/
 │   ├── rag/
 │   │   ├── embedder.py                ← fastembed BGE wrapper
 │   │   ├── retriever.py               ← Qdrant hybrid search (dense + sparse, RRF)
-│   │   ├── pipeline.py                ← ingest / retrieve / retrieve_multi + reranking
+│   │   ├── pipeline.py                ← ingest / retrieve / retrieve_multi + fusion retrieval + reranking
+│   │   ├── graph_store.py             ← Neo4j uploaded-document graph RAG
 │   │   └── reranker.py                ← BGE cross-encoder reranker (ONNX, CPU)
 │   ├── services/
 │   │   ├── edgar_pipeline.py          ← multi-filing pipeline + 8-K classifier
@@ -380,6 +450,8 @@ finsight-ai/
 └── tests/
     ├── conftest.py
     ├── test_routes.py
+    ├── test_graph_store.py            ← Neo4j graph RAG unit tests with fake driver/session
+    ├── test_rag_pipeline.py           ← fusion retrieval / section-reasoning tests
     └── eval_baseline/
         ├── run_eval.py                ← DeepEval runner — 6 metrics, custom DeepSeekJudge, caching
         ├── questions.json             ← 20 hand-curated Q&A pairs with ground truth across 5 tickers
@@ -432,6 +504,9 @@ finsight-ai/
 - [x] **LLM-as-judge** — `services/judge.py` scores every pipeline run on 4 dimensions (faithfulness, risk coverage, debate quality, recommendation clarity) and pushes all 5 scores to Langfuse via `create_score()`. Uses `CHEAP_MODEL` (Kimi), never raises
 - [x] **Langfuse session grouping** — chat turns linked to Langfuse sessions via `propagate_attributes(session_id=...)`. Full conversation replay visible in Langfuse dashboard
 - [x] **Kimi/Moonshot AI primary LLM** — migrated from DeepSeek to `kimi-k2.6` as primary. 256k context, $0.15/$0.60 per 1M tokens. DeepSeek Flash retained as secondary fallback
+- [x] **Dual RAG retrieval** — optional fusion mode combines Qdrant vector retrieval with PageIndex-style vectorless section retrieval, dedupes candidates, and reranks the merged evidence set
+- [x] **MarkItDown document uploads** — upload endpoint converts many business file formats into Markdown-like text before chunking
+- [x] **Neo4j graph RAG for uploads** — local graph database stores uploaded documents as `Document → Section → Chunk`; chat can target a specific uploaded `filing_id`
 
 ### Planned
 - [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code and any MCP client
@@ -462,9 +537,35 @@ finsight-ai/
 
 **Why LangGraph as orchestrator?** The analysis pipeline is a DAG with parallel branches and a fan-in synthesis step — exactly what `StateGraph` is built for. LangGraph provides checkpointing, typed state, and explicit node/edge definitions. Plain `asyncio.gather` would work but gives no observability, resumption, or state inspection.
 
+**Why dual RAG instead of only vector search?** Embeddings are strong for semantic similarity, but SEC filings have predictable structure. Risk questions often map to Item 1A, revenue questions to MD&A, and recent event questions to 8-K content. The fusion path combines vector recall with PageIndex-style section retrieval, then reranks the merged evidence so the LLM receives fewer irrelevant chunks.
+
+**Why MarkItDown for uploads?** Real business users upload PDFs, Office files, spreadsheets, HTML, CSV, JSON, XML, and plain text. MarkItDown provides a common conversion layer into Markdown-like text, which keeps ingestion maintainable instead of writing one parser per file type.
+
+**Why Neo4j for uploaded-document RAG?** Uploaded files naturally have document structure: documents contain sections, sections contain chunks, and future versions can connect chunks to companies, risks, dates, events, and metrics. Neo4j makes those relationships explicit and inspectable. Qdrant remains the better fit for high-volume vector similarity search, so the system uses both databases for different retrieval jobs.
+
 ---
 
 ## Changelog
+
+### Day 60 — 2026-06-17
+
+**Dual RAG and Graph RAG**
+- Added `RETRIEVAL_MODE=hybrid|fusion`. `fusion` combines Qdrant vector retrieval with PageIndex-style vectorless section retrieval, dedupes by `(filing_id, chunk_index)`, and reranks the final candidate set
+- Added LLM section reasoner using `CHEAP_MODEL`, Redis cache key `llm_cache:sections:*`, 7-day TTL, and regex fallback
+- Added `backend/rag/graph_store.py` with Neo4j local graph RAG for uploaded documents
+- Graph model: `(:Document)-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(:Chunk)`
+- Added Neo4j schema setup for unique `Document.filing_id` plus section/chunk indexes
+
+**Document Uploads**
+- Added `backend/ingestion/document_converter.py` using Microsoft MarkItDown
+- Added `POST /api/documents/ingest` with multipart upload, ticker, filing type, company name, and filed date metadata
+- Upload path converts file → chunks text → stores filing metadata → inserts graph nodes into Neo4j → registers the filing for chat
+- Added optional `filing_id` to `/api/chat` so uploaded documents can be queried directly
+
+**Infrastructure and Tests**
+- Added Neo4j 5 Community service to Docker Compose with local browser on `127.0.0.1:7474` and Bolt on `127.0.0.1:7687`
+- Added `neo4j>=5.25.0`, `python-multipart`, and `markitdown[all]` dependencies
+- Added unit tests for fusion retrieval, upload ingestion, and Neo4j graph store behavior
 
 ### Day 25 — 2026-06-08
 

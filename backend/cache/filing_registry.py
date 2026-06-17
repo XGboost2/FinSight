@@ -26,13 +26,17 @@ def register_filing(
     filing_type: str = "10-K",
 ) -> None:
     """Write to registry after successful Qdrant upsert."""
-    record = json.dumps({
+    record = {
         "filing_id": filing_id,
+        "ticker": ticker.upper(),
         "filing_type": filing_type.upper(),
         "filed_date": meta.get("filed_date", ""),
         "chunk_count": meta.get("chunk_count", 0),
         "ingested_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    for key, value in meta.items():
+        record.setdefault(key, value)
+    record = json.dumps(record)
     redis_client.hset(_key(filing_type), ticker.upper(), record)
 
 

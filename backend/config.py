@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str = ""
 
+    # --- Graph DB for uploaded-document RAG ---
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "finsight-neo4j"
+    NEO4J_DATABASE: str = "neo4j"
+
+    # --- Retrieval ---
+    # hybrid = existing dense+sparse RRF path
+    # fusion = vector RAG + PageIndex-style section retrieval, reranked together
+    RETRIEVAL_MODE: str = "hybrid"
+    SECTION_REASONER_CACHE_TTL_SECONDS: int = 604800  # 7 days
+
+    # --- Document Uploads ---
+    DOCUMENT_UPLOAD_MAX_BYTES: int = 25 * 1024 * 1024
+
     # --- Observability (Day 49+) ---
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_PUBLIC_KEY: str = ""

@@ -1547,6 +1547,108 @@ body {
   color: var(--muted);
 }
 
+.document-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.upload-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.upload-heading svg { color: var(--accent); flex-shrink: 0; }
+
+.upload-file {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0.45rem 0.65rem;
+  border: 1px dashed var(--accent-border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  cursor: pointer;
+  background: rgba(82, 183, 136, 0.06);
+}
+.upload-file input { display: none; }
+.upload-file svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.upload-file span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-description {
+  margin: -0.1rem 0 0;
+  font-size: 0.69rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.upload-controls {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.upload-select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.72rem;
+  padding: 0 0.45rem;
+}
+
+.upload-submit {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0 0.65rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.upload-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.upload-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+.upload-status svg { flex-shrink: 0; }
+.upload-ok { color: var(--green); }
+.upload-error { color: var(--red); }
+
 .filing-meta {
   display: flex;
   flex-direction: column;

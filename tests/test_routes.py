@@ -1,6 +1,7 @@
 """Backend endpoint tests — all external dependencies mocked."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from conftest import (
     EDGAR_RESULT, FILING_ID, FILING_ID2, FILING_RECORD, LLM_RESULT,
     STORED_FILING, TICKER, TICKER2,
 )
+from ingestion.document_converter import ConvertedDocument, DocumentConversionUnavailable
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -128,6 +130,57 @@ class TestIngest:
 
 
 # ── Ingest Status ─────────────────────────────────────────────────────────────
+
+class TestDocumentIngest:
+    def test_upload_converts_and_ingests_document(self, client, mock_redis):
+        converted = ConvertedDocument(
+            filename="annual-report.pdf",
+            text="Item 1. Business\n\nRevenue comes from products.\n\nItem 1A. Risk Factors\n\nCompetition risk.",
+            chars=89,
+        )
+        chunks = [
+            {"id": "c1", "text": "Item 1. Business", "chunk_index": 0, "char_start": 0, "char_end": 16},
+            {"id": "c2", "text": "Item 1A. Risk Factors", "chunk_index": 1, "char_start": 17, "char_end": 38},
+        ]
+
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.convert_document_bytes", return_value=converted), \
+             patch("api.routes.chunk_text", return_value=chunks), \
+             patch("api.routes.store_filing") as mock_store, \
+             patch("api.routes.ingest_graph_document") as mock_graph_ingest, \
+             patch("api.routes.register_filing") as mock_register:
+            r = client.post(
+                "/api/documents/ingest",
+                data={"ticker": "aapl", "filing_type": "10-K", "company_name": "Apple Inc."},
+                files={"file": ("annual-report.pdf", b"%PDF test", "application/pdf")},
+            )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ticker"] == "AAPL"
+        assert body["filing_type"] == "10-K"
+        assert body["filename"] == "annual-report.pdf"
+        assert body["chunk_count"] == 2
+        assert body["filed_date"] == datetime.now(timezone.utc).date().isoformat()
+        assert body["retrieval"] == "neo4j_vectorless_graph"
+        mock_store.assert_called_once()
+        mock_graph_ingest.assert_called_once()
+        assert mock_graph_ingest.call_args.args[2] == chunks
+        mock_register.assert_called_once()
+        assert mock_register.call_args.args[3]["filed_date"] == body["filed_date"]
+
+    def test_upload_returns_503_when_markitdown_missing(self, client, mock_redis):
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.convert_document_bytes", side_effect=DocumentConversionUnavailable("install markitdown")):
+            r = client.post(
+                "/api/documents/ingest",
+                data={"ticker": TICKER, "filing_type": "CUSTOM-DOC"},
+                files={"file": ("deck.pptx", b"pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")},
+            )
+
+        assert r.status_code == 503
+        assert "markitdown" in r.json()["detail"].lower()
+
 
 VALID_TASK_ID = "abcdef12-3456-7890-abcd-ef1234567890"  # valid hex UUID format
 

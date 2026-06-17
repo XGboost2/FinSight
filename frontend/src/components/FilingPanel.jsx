@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
-import { FileText, MessageCircle, Loader, ChevronRight } from 'lucide-react'
+import { FileText, MessageCircle, Loader, ChevronRight, Upload, CheckCircle, AlertCircle } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 
@@ -13,7 +13,8 @@ const SAMPLE_QUESTIONS = [
 ]
 
 const MODELS = [
-  { value: 'auto',               label: 'Auto',             group: 'DeepSeek' },
+  { value: 'auto',               label: 'Auto',             group: 'Kimi' },
+  { value: 'kimi-k2.6',          label: 'Kimi K2.6',        group: 'Kimi' },
   { value: 'deepseek-v4-flash',  label: 'DS Flash',         group: 'DeepSeek' },
   { value: 'deepseek-v4-pro',   label: 'DS Pro',           group: 'DeepSeek' },
   { value: 'claude-haiku-4-5',   label: 'Haiku',            group: 'Anthropic' },
@@ -28,7 +29,15 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
   const [history, setHistory] = useState([])
   const [chatLoading, setChatLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('auto')
+  const [uploadFile, setUploadFile] = useState(null)
+  const [uploadType, setUploadType] = useState('10-K')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const [uploadedFiling, setUploadedFiling] = useState(null)
   const bottomRef = useRef(null)
+
+  const activeFiling = uploadedFiling ?? filing
+  const activeFilingId = uploadedFiling?.filing_id ?? filingId
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -37,11 +46,18 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
   useEffect(() => {
     setHistory([])
     setQuestion('')
-  }, [filingId])
+  }, [activeFilingId])
+
+  useEffect(() => {
+    setUploadedFiling(null)
+    setUploadFile(null)
+    setUploadError('')
+    setUploadType('10-K')
+  }, [ticker])
 
   const send = async (q) => {
     const text = q.trim()
-    if (!text || !filingId || chatLoading) return
+    if (!text || !activeFilingId || chatLoading) return
     setQuestion('')
     setHistory(h => [...h, { role: 'user', text }])
     setChatLoading(true)
@@ -51,6 +67,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
       const { data } = await axios.post(`${API_URL}/api/chat`, {
         question: text,
         ticker: ticker,
+        filing_id: activeFilingId,
         model: selectedModel === 'auto' ? null : selectedModel,
         session_id: sessionId ?? undefined,
       }, { headers })
@@ -76,6 +93,38 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     send(question)
   }
 
+  const handleUpload = async (e) => {
+    e.preventDefault()
+    if (!ticker || !uploadFile || uploading) return
+
+    const form = new FormData()
+    form.append('file', uploadFile)
+    form.append('ticker', ticker)
+    form.append('filing_type', uploadType)
+    form.append('company_name', companyName || '')
+
+    setUploading(true)
+    setUploadError('')
+    try {
+      const { data } = await axios.post(`${API_URL}/api/documents/ingest`, form)
+      setUploadedFiling({
+        filing_id: data.filing_id,
+        company_name: data.company_name || companyName,
+        filing_type: data.filing_type,
+        filed_date: data.filed_date || '—',
+        chunk_count: data.chunk_count,
+        filename: data.filename,
+      })
+      setHistory([])
+      setQuestion('')
+      setUploadFile(null)
+    } catch (e) {
+      setUploadError(e.response?.data?.detail || 'Upload failed — check backend logs.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <div className="filing-panel glass-card">
       <div className="panel-header">
@@ -96,14 +145,66 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
         </div>
       )}
 
-      {filing && !fetchingFiling && (
+      {ticker && !fetchingFiling && (
+        <form className="document-upload" onSubmit={handleUpload}>
+          <div className="upload-heading">
+            <Upload size={14} />
+            <span>Upload document</span>
+          </div>
+          <label className="upload-file">
+            <input
+              type="file"
+              onChange={e => setUploadFile(e.target.files?.[0] ?? null)}
+              disabled={uploading}
+            />
+            <Upload size={13} />
+            <span>{uploadFile ? uploadFile.name : 'Choose file: PDF, Word, PowerPoint, Excel, image, audio, HTML, CSV, JSON, XML, ZIP, EPub'}</span>
+          </label>
+          <p className="upload-description">
+            MarkItDown converts many formats to Markdown, then FinSight indexes the upload with Neo4j vectorless graph RAG.
+          </p>
+          <div className="upload-controls">
+            <select
+              value={uploadType}
+              onChange={e => setUploadType(e.target.value)}
+              disabled={uploading}
+              className="upload-select"
+              aria-label="Filing type"
+            >
+              <option value="10-K">10-K</option>
+              <option value="10-Q">10-Q</option>
+              <option value="8-K">8-K</option>
+              <option value="CUSTOM-DOC">Custom</option>
+            </select>
+            <button type="submit" className="upload-submit" disabled={!uploadFile || uploading}>
+              {uploading ? <Loader size={13} className="spin" /> : <Upload size={13} />}
+              <span>{uploading ? 'Indexing' : uploadFile ? 'Upload' : 'Choose file first'}</span>
+            </button>
+          </div>
+          {uploadedFiling && (
+            <div className="upload-status upload-ok">
+              <CheckCircle size={13} />
+              <span>{uploadedFiling.filename || 'Document'} indexed as {uploadedFiling.filing_type} with Neo4j graph RAG</span>
+            </div>
+          )}
+          {uploadError && (
+            <div className="upload-status upload-error">
+              <AlertCircle size={13} />
+              <span>{uploadError}</span>
+            </div>
+          )}
+        </form>
+      )}
+
+      {activeFiling && !fetchingFiling && (
         <>
           <div className="filing-meta">
             {[
-              ['Company', filing.company_name || companyName],
-              ['Type', filing.filing_type],
-              ['Filed', filing.filed_date || '—'],
-              ['Indexed', `${filing.chunk_count} chunks`],
+              ['Company', activeFiling.company_name || companyName],
+              ['Type', activeFiling.filing_type],
+              ['Filed', activeFiling.filed_date || '—'],
+              ['Indexed', `${activeFiling.chunk_count} chunks`],
+              ...(activeFiling.filename ? [['Source', activeFiling.filename]] : []),
             ].map(([label, value]) => (
               <div key={label} className="meta-row">
                 <span className="meta-label">{label}</span>
