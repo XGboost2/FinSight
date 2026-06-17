@@ -96,13 +96,13 @@ describe('FilingPanel', () => {
     axios.post
       .mockResolvedValueOnce({
         data: {
-          ticker: 'AAPL',
+          ticker: 'SNDK',
           filing_id: 'upload-abc123',
           filing_type: 'CUSTOM-DOC',
           filename: 'deck.pdf',
           chunk_count: 7,
           char_count: 1200,
-          company_name: 'Apple Inc.',
+          company_name: 'SanDisk',
           filed_date: '2025-01-02',
           retrieval: 'neo4j_vectorless_graph',
         },
@@ -118,8 +118,11 @@ describe('FilingPanel', () => {
     fireEvent.change(screen.getByLabelText(/filing type/i), { target: { value: 'CUSTOM-DOC' } })
     fireEvent.click(screen.getByRole('button', { name: /upload/i }))
 
-    await waitFor(() => expect(screen.getByText(/deck.pdf indexed as custom-doc with neo4j graph rag/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/sandisk indexed as custom-doc with neo4j graph rag/i)).toBeInTheDocument())
     expect(screen.getByText('7 chunks')).toBeInTheDocument()
+    const uploadForm = axios.post.mock.calls[0][1]
+    expect(uploadForm.get('ticker')).toBe('AAPL')
+    expect(uploadForm.get('company_name')).toBe('Apple Inc.')
 
     await userEvent.type(screen.getByPlaceholderText(/ask about/i), 'What is in this deck?')
     fireEvent.click(screen.getByRole('button', { name: /ask/i }))

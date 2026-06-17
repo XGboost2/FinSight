@@ -104,6 +104,58 @@ def _validate_filing_id(filing_id: str) -> str:
     return fid
 
 
+_COMPARISON_TERMS = (
+    "compare", "comparison", "versus", " vs ", "vs.", "difference",
+    "differences", "relative to", "against", "between",
+)
+
+
+def _is_comparison_question(question: str) -> bool:
+    text = f" {question.lower()} "
+    return any(term in text for term in _COMPARISON_TERMS)
+
+
+def _clean_metadata_value(value: str) -> str:
+    value = re.sub(r"\s+", " ", value).strip(" :-\t\r\n")
+    return value[:120]
+
+
+def _infer_uploaded_document_identity(text: str, filename: str, fallback_ticker: str, fallback_company: str) -> tuple[str, str]:
+    """Infer the uploaded filing's own identity from SEC/10-K text when possible."""
+    company_patterns = (
+        r"COMPANY CONFORMED NAME:\s*([^\r\n]+)",
+        r"Exact name of registrant as specified in its charter\s*:?\s*([^\r\n]+)",
+        r"Exact Name of Registrant as Specified in Its Charter\s*:?\s*([^\r\n]+)",
+    )
+    inferred_company = ""
+    for pattern in company_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            inferred_company = _clean_metadata_value(match.group(1))
+            break
+
+    ticker_patterns = (
+        r"Trading Symbol\(s\)\s*([A-Z0-9.\-]{1,10})\b",
+        r"\b(?:NASDAQ|NYSE|Nasdaq|NYSE)\s*[:\-]?\s*([A-Z0-9.\-]{1,10})\b",
+        r"\b([A-Z0-9.\-]{1,10})\s+(?:NASDAQ|NYSE|Nasdaq|NYSE)\b",
+    )
+    inferred_ticker = ""
+    for pattern in ticker_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            inferred_ticker = _clean_metadata_value(match.group(1)).upper()
+            break
+
+    if not inferred_company:
+        stem = re.sub(r"\.[A-Za-z0-9]+$", "", filename)
+        if stem:
+            inferred_company = _clean_metadata_value(stem.replace("_", " ").replace("-", " "))
+
+    company = inferred_company or fallback_company or fallback_ticker
+    ticker = inferred_ticker or fallback_ticker
+    return ticker.upper(), company
+
+
 
 
 _session_id_header = APIKeyHeader(name="X-Session-ID", auto_error=False)
@@ -288,8 +340,9 @@ async def ingest_document(
     Use filing_type=10-K, 10-Q, or 8-K when the uploaded document represents one
     of those SEC forms. Other uploads can use CUSTOM-DOC.
     """
-    ticker = _validate_ticker(ticker)
+    selected_ticker = _validate_ticker(ticker)
     filing_type = _validate_filing_type(filing_type)
+    selected_company = company_name.strip() or selected_ticker
     filed_date = filed_date.strip() or datetime.now(timezone.utc).date().isoformat()
     settings = get_settings()
 
@@ -303,6 +356,13 @@ async def ingest_document(
         raise HTTPException(503, str(e)) from e
     except DocumentConversionError as e:
         raise HTTPException(422, str(e)) from e
+
+    ticker, company_name = _infer_uploaded_document_identity(
+        converted.text,
+        converted.filename,
+        selected_ticker,
+        selected_company,
+    )
 
     digest = hashlib.sha256(
         f"{ticker}:{filing_type}:{file.filename}:{converted.text[:500]}".encode()
@@ -321,6 +381,8 @@ async def ingest_document(
         "filed_date": filed_date,
         "filename": converted.filename,
         "source": "markitdown",
+        "selected_ticker": selected_ticker,
+        "selected_company_name": selected_company,
         "text": converted.text,
     }
 
@@ -332,8 +394,9 @@ async def ingest_document(
         "chunk_count": len(chunks),
         "filename": converted.filename,
         "source": "markitdown",
+        "original_filing_type": filing_type,
         "retrieval": "neo4j_vectorless_graph",
-    }, filing_type=filing_type)
+    }, filing_type="CUSTOM-DOC")
 
     logger.info(
         "Document ingested via MarkItDown graph RAG: ticker=%s filing_type=%s filename=%s chunks=%d",
@@ -783,12 +846,29 @@ async def chat(
     # ── Collect all filing IDs: 10-K (primary) + 10-Q ────────────────
     if explicit_filing_id:
         all_filing_ids = [filing_id]
+        vector_filing_ids = []
+        if _is_comparison_question(request_body.question) and is_ingested(redis, ticker):
+            ticker_record = get_filing_record(redis, ticker)
+            if ticker_record:
+                ten_q_ids = [
+                    r["filing_id"] for r in list_ingested(redis, "10-Q")
+                    if r.get("ticker", "").upper() == ticker.upper()
+                ]
+                vector_filing_ids = [
+                    fid for fid in [ticker_record["filing_id"]] + ten_q_ids
+                    if fid != filing_id
+                ]
+                logger.info(
+                    "Chat mixed retrieval enabled: ticker=%s vector_filings=%d graph_filing=%s",
+                    ticker, len(vector_filing_ids), filing_id,
+                )
     else:
         ten_q_ids = [
             r["filing_id"] for r in list_ingested(redis, "10-Q")
             if r.get("ticker", "").upper() == ticker.upper()
         ]
         all_filing_ids = [filing_id] + ten_q_ids
+        vector_filing_ids = all_filing_ids
 
     # ── 8-K events from Redis (not in Qdrant — injected as text block) ─
     events_block = ""
@@ -827,6 +907,13 @@ async def chat(
                 if chunk_key not in seen:
                     seen.add(chunk_key)
                     relevant_chunks.append(c)
+            if vector_filing_ids:
+                retriever = rag_retrieve_multi if len(vector_filing_ids) > 1 else lambda query, ids, **kw: rag_retrieve(query, ids[0], **kw)
+                for c in retriever(q, vector_filing_ids, top_k=5):
+                    chunk_key = (c.get("filing_id", ""), c["chunk_index"])
+                    if chunk_key not in seen:
+                        seen.add(chunk_key)
+                        relevant_chunks.append(c)
     else:
         retriever = rag_retrieve_multi if len(all_filing_ids) > 1 else lambda q, ids, **kw: rag_retrieve(q, ids[0], **kw)
         for q in ([request_body.question] + ([extra_query] if extra_query else [])):
@@ -837,7 +924,9 @@ async def chat(
                     relevant_chunks.append(c)
 
     context = "\n\n---\n\n".join(
-        f"[Chunk {c['chunk_index']}]\n{c['text']}" for c in relevant_chunks
+        f"[Filing {c.get('filing_id', 'unknown')} | Chunk {c['chunk_index']} | "
+        f"Path {c.get('retrieval_path', 'vector')}]\n{c['text']}"
+        for c in relevant_chunks
     ) + events_block
 
     # ── Load conversation history ─────────────────────────────────────

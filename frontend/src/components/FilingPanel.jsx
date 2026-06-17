@@ -110,6 +110,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
       setUploadedFiling({
         filing_id: data.filing_id,
         company_name: data.company_name || companyName,
+        ticker: data.ticker,
         filing_type: data.filing_type,
         filed_date: data.filed_date || '—',
         chunk_count: data.chunk_count,
@@ -161,7 +162,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
             <span>{uploadFile ? uploadFile.name : 'Choose file: PDF, Word, PowerPoint, Excel, image, audio, HTML, CSV, JSON, XML, ZIP, EPub'}</span>
           </label>
           <p className="upload-description">
-            MarkItDown converts many formats to Markdown, then FinSight indexes the upload with Neo4j vectorless graph RAG.
+            MarkItDown converts many formats to Markdown, infers the uploaded company from the document, then indexes it with Neo4j vectorless graph RAG.
           </p>
           <div className="upload-controls">
             <select
@@ -184,7 +185,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
           {uploadedFiling && (
             <div className="upload-status upload-ok">
               <CheckCircle size={13} />
-              <span>{uploadedFiling.filename || 'Document'} indexed as {uploadedFiling.filing_type} with Neo4j graph RAG</span>
+              <span>{uploadedFiling.company_name || uploadedFiling.ticker || 'Document'} indexed as {uploadedFiling.filing_type} with Neo4j graph RAG</span>
             </div>
           )}
           {uploadError && (

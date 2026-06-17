@@ -74,7 +74,17 @@ def get_chat_history(redis, session_id: str, ticker: str) -> list[dict]:
     """Return conversation history for this session + ticker."""
     key = _history_key(session_id, ticker)
     raw_msgs = redis.lrange(key, -CHAT_HISTORY_MAX, -1)
-    return [json.loads(m) for m in raw_msgs] if raw_msgs else []
+    history = []
+    for raw in raw_msgs or []:
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            logger.warning("Skipping malformed chat history message: session=%s ticker=%s", session_id, ticker)
+            continue
+        content = msg.get("content")
+        if msg.get("role") in {"user", "assistant"} and isinstance(content, str) and content.strip():
+            history.append({"role": msg["role"], "content": content.strip()})
+    return history
 
 
 def append_chat_turn(
@@ -87,6 +97,11 @@ def append_chat_turn(
     """Append a user+assistant turn to history. Guard against orphaned writes."""
     if not session_exists(redis, session_id):
         logger.debug("Session expired, discarding chat turn: %s", session_id)
+        return
+    question = question.strip()
+    answer = answer.strip()
+    if not question or not answer:
+        logger.warning("Skipping empty chat turn write: session=%s ticker=%s", session_id, ticker)
         return
 
     key = _history_key(session_id, ticker)
@@ -111,5 +126,7 @@ def get_cached_answer(redis, session_id: str, ticker: str, question: str) -> str
 
 def set_cached_answer(redis, session_id: str, ticker: str, question: str, answer: str) -> None:
     if not session_exists(redis, session_id):
+        return
+    if not answer.strip():
         return
     redis.setex(_cache_key(session_id, ticker, question), _session_ttl(), answer)

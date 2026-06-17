@@ -7,7 +7,9 @@ Markdown/text that can flow through FinSight's existing chunking and RAG path.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
+import re
 import tempfile
 
 
@@ -24,6 +26,24 @@ class ConvertedDocument:
     filename: str
     text: str
     chars: int
+
+
+def clean_converted_text(text: str) -> str:
+    """Remove residual markup/noise from converted upload text before indexing."""
+    text = unescape(text or "")
+    text = re.sub(r"(?is)<(script|style|noscript|svg|meta|head)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?is)<!--.*?-->", " ", text)
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)</(?:p|div|section|article|header|footer|tr|li|h[1-6])>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = re.sub(r"\b(?:class|style|id|href|src|alt|title)=\"[^\"]*\"", " ", text)
+    text = re.sub(r"\b(?:class|style|id|href|src|alt|title)='[^']*'", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def convert_document_bytes(filename: str, content: bytes) -> ConvertedDocument:
@@ -52,7 +72,9 @@ def convert_document_bytes(filename: str, content: bytes) -> ConvertedDocument:
         except Exception as exc:
             raise DocumentConversionError(f"MarkItDown conversion failed: {exc}") from exc
 
-    text = (getattr(result, "text_content", None) or getattr(result, "markdown", None) or "").strip()
+    text = clean_converted_text(
+        getattr(result, "text_content", None) or getattr(result, "markdown", None) or ""
+    )
     if not text:
         raise DocumentConversionError("MarkItDown produced no text")
 

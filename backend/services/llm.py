@@ -28,6 +28,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _httpx_client: httpx.AsyncClient | None = None
+_CHAT_ROLES = {"user", "assistant"}
 
 
 def _get_httpx_client() -> httpx.AsyncClient:
@@ -35,6 +36,25 @@ def _get_httpx_client() -> httpx.AsyncClient:
     if _httpx_client is None or _httpx_client.is_closed:
         _httpx_client = httpx.AsyncClient(timeout=60)
     return _httpx_client
+
+
+def _sanitize_conversation(history: list[dict] | None, user_message: str) -> list[dict]:
+    """Build provider-safe chat messages from Redis history plus the current prompt."""
+    messages: list[dict] = []
+    dropped = 0
+    for msg in (history or [])[-20:]:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role not in _CHAT_ROLES or not isinstance(content, str) or not content.strip():
+            dropped += 1
+            continue
+        messages.append({"role": role, "content": content.strip()})
+
+    if dropped:
+        logger.warning("Dropped %d invalid/empty chat history messages before LLM call", dropped)
+
+    messages.append({"role": "user", "content": user_message})
+    return messages
 
 
 # Cost per 1M tokens (USD) — update as pricing changes
@@ -100,6 +120,53 @@ def _route_model(query: str) -> str:
     return CHEAP_MODEL
 
 
+def _provider_has_key(provider: str, settings: Any) -> bool:
+    if provider == "kimi":
+        return bool(settings.KIMI_API_KEY)
+    if provider == "deepseek":
+        return bool(settings.DEEPSEEK_API_KEY)
+    if provider == "anthropic":
+        return bool(settings.ANTHROPIC_API_KEY)
+    if provider == "openai":
+        return bool(settings.OPENAI_API_KEY)
+    return False
+
+
+async def _call_provider(
+    provider: str,
+    user_message: str,
+    model: str,
+    settings: Any,
+    conversation: list[dict],
+) -> dict[str, Any]:
+    if provider == "kimi":
+        return await _call_kimi(user_message, model, settings, conversation)
+    if provider == "deepseek":
+        return await _call_deepseek(user_message, model, settings, conversation)
+    if provider == "anthropic":
+        return await _call_anthropic(user_message, model, settings, conversation)
+    if provider == "openai":
+        return await _call_openai(user_message, model, settings, conversation)
+    raise RuntimeError(f"Unsupported LLM provider: {provider}")
+
+
+def _fallback_models(primary_model: str, settings: Any) -> list[str]:
+    candidates = [
+        primary_model,
+        CHEAP_FALLBACK,
+        "claude-haiku-4-5",
+        "gpt-4o-mini",
+        CHEAP_MODEL,
+    ]
+    models: list[str] = []
+    for candidate in candidates:
+        if candidate in models:
+            continue
+        if _provider_has_key(_provider(candidate), settings):
+            models.append(candidate)
+    return models
+
+
 @observe(as_type="generation")
 async def ask_llm(
     query: str,
@@ -131,37 +198,49 @@ async def ask_llm(
 
 Question: {query}"""
 
-    # Build messages array: system → history turns → current question
-    conversation: list[dict] = []
-    if history:
-        conversation.extend(history[-20:])  # last 10 turns max
-    conversation.append({"role": "user", "content": user_message})
+    # Build messages array: system → valid history turns → current question.
+    conversation = _sanitize_conversation(history, user_message)
 
     routed_model = model or _route_model(query)
     provider = _provider(routed_model)
     logger.info("Model router: query_len=%d history=%d → %s (%s)",
                 len(query), len(history or []), routed_model, provider)
 
-    if provider == "kimi" and settings.KIMI_API_KEY:
-        result = await _call_kimi(user_message, routed_model, settings, conversation)
-    elif provider == "deepseek" and settings.DEEPSEEK_API_KEY:
-        result = await _call_deepseek(user_message, routed_model, settings, conversation)
-    elif provider == "anthropic" and settings.ANTHROPIC_API_KEY:
-        result = await _call_anthropic(user_message, routed_model, settings, conversation)
-    elif provider == "openai" and settings.OPENAI_API_KEY:
-        result = await _call_openai(user_message, routed_model, settings, conversation)
-    else:
-        logger.warning("No API key for provider=%s model=%s — falling back", provider, routed_model)
-        if settings.KIMI_API_KEY:
-            result = await _call_kimi(user_message, CHEAP_MODEL, settings, conversation)
-        elif settings.DEEPSEEK_API_KEY:
-            result = await _call_deepseek(user_message, CHEAP_FALLBACK, settings, conversation)
-        elif settings.ANTHROPIC_API_KEY:
-            result = await _call_anthropic(user_message, "claude-haiku-4-5", settings, conversation)
-        elif settings.OPENAI_API_KEY:
-            result = await _call_openai(user_message, "gpt-4o-mini", settings, conversation)
+    result: dict[str, Any] | None = None
+    failures: list[str] = []
+    for candidate_model in _fallback_models(routed_model, settings):
+        candidate_provider = _provider(candidate_model)
+        try:
+            candidate = await _call_provider(
+                candidate_provider,
+                user_message,
+                candidate_model,
+                settings,
+                conversation,
+            )
+        except Exception as exc:
+            failures.append(f"{candidate_model}: {exc}")
+            logger.warning("LLM provider failed: model=%s provider=%s error=%s",
+                           candidate_model, candidate_provider, exc)
+            continue
+
+        answer = (candidate.get("answer") or "").strip()
+        if not answer:
+            failures.append(f"{candidate_model}: empty answer")
+            logger.warning("LLM provider returned empty answer: model=%s provider=%s tokens_out=%s",
+                           candidate_model, candidate_provider, candidate.get("tokens_out"))
+            continue
+
+        candidate["answer"] = answer
+        result = candidate
+        break
+
+    if result is None:
+        if failures:
+            logger.error("All configured LLM providers failed or returned empty output: %s", " | ".join(failures))
         else:
-            result = _mock_response(query)
+            logger.warning("No configured LLM API keys — using mock response")
+        result = _mock_response(query)
 
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     result["latency_ms"] = elapsed_ms

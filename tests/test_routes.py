@@ -135,7 +135,12 @@ class TestDocumentIngest:
     def test_upload_converts_and_ingests_document(self, client, mock_redis):
         converted = ConvertedDocument(
             filename="annual-report.pdf",
-            text="Item 1. Business\n\nRevenue comes from products.\n\nItem 1A. Risk Factors\n\nCompetition risk.",
+            text=(
+                "COMPANY CONFORMED NAME: SanDisk Corporation\n"
+                "Trading Symbol(s) SNDK\n"
+                "Item 1. Business\n\nRevenue comes from products.\n\n"
+                "Item 1A. Risk Factors\n\nCompetition risk."
+            ),
             chars=89,
         )
         chunks = [
@@ -157,7 +162,8 @@ class TestDocumentIngest:
 
         assert r.status_code == 200
         body = r.json()
-        assert body["ticker"] == "AAPL"
+        assert body["ticker"] == "SNDK"
+        assert body["company_name"] == "SanDisk Corporation"
         assert body["filing_type"] == "10-K"
         assert body["filename"] == "annual-report.pdf"
         assert body["chunk_count"] == 2
@@ -165,9 +171,13 @@ class TestDocumentIngest:
         assert body["retrieval"] == "neo4j_vectorless_graph"
         mock_store.assert_called_once()
         mock_graph_ingest.assert_called_once()
-        assert mock_graph_ingest.call_args.args[2] == chunks
+        assert mock_graph_ingest.call_args.args[2]["ticker"] == "SNDK"
+        assert mock_graph_ingest.call_args.args[2]["company_name"] == "SanDisk Corporation"
+        assert mock_graph_ingest.call_args.args[2]["selected_ticker"] == "AAPL"
+        assert mock_graph_ingest.call_args.args[3] == chunks
         mock_register.assert_called_once()
         assert mock_register.call_args.args[3]["filed_date"] == body["filed_date"]
+        assert mock_register.call_args.kwargs["filing_type"] == "CUSTOM-DOC"
 
     def test_upload_returns_503_when_markitdown_missing(self, client, mock_redis):
         with patch("api.routes.get_redis", return_value=mock_redis), \
@@ -313,6 +323,44 @@ class TestChat:
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
+
+    def test_compare_uploaded_graph_doc_with_vector_filing(self, client, mock_redis):
+        graph_chunks = [{
+            "filing_id": "upload-sandisk",
+            "chunk_index": 3,
+            "text": "SanDisk risk factors include NAND pricing pressure.",
+            "retrieval_path": "neo4j_vectorless_graph",
+        }]
+        vector_chunks = [{
+            "filing_id": FILING_ID,
+            "chunk_index": 1,
+            "text": "Apple risk factors include supply chain disruption.",
+            "retrieval_path": "qdrant_hybrid",
+        }]
+
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=True), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
+             patch("api.routes.list_ingested", return_value=[]), \
+             patch("api.routes.graph_exists", return_value=True), \
+             patch("api.routes.retrieve_graph", return_value=graph_chunks) as mock_graph, \
+             patch("api.routes.rag_retrieve", return_value=vector_chunks) as mock_vector, \
+             patch("api.routes.ask_llm", new_callable=AsyncMock, return_value=LLM_RESULT) as mock_llm:
+            r = client.post("/api/chat", json={
+                "ticker": TICKER,
+                "filing_id": "upload-sandisk",
+                "question": "Compare risk factors of Apple and SanDisk",
+            })
+
+        assert r.status_code == 200
+        mock_graph.assert_called()
+        mock_vector.assert_called()
+        context = mock_llm.call_args.args[1]
+        assert "SanDisk risk factors" in context
+        assert "Apple risk factors" in context
+        assert "Path neo4j_vectorless_graph" in context
+        assert f"Filing {FILING_ID}" in context
+
 
 class TestAdmin:
     def test_refresh_tickers(self, client, mock_redis):
