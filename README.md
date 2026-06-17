@@ -350,14 +350,19 @@ OPENAI_API_KEY=sk-...          # optional fallback
 # News
 FINNHUB_API_KEY=...
 
-# Infrastructure — defaults match docker-compose
+# Infrastructure — values are passed to Docker at runtime from .env
 QDRANT_URL=http://qdrant:6333
-REDIS_URL=redis://redis:6379
+QDRANT_API_KEY=
+
+# Redis
+REDIS_PASSWORD=replace_with_local_redis_password
+REDIS_URL=redis://:replace_with_local_redis_password@redis:6379
 
 # Neo4j graph RAG for uploaded documents
 NEO4J_URI=bolt://neo4j:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=finsight-neo4j
+NEO4J_PASSWORD=replace_with_local_neo4j_password
+NEO4J_AUTH=neo4j/replace_with_local_neo4j_password
 NEO4J_DATABASE=neo4j
 
 # Retrieval mode

@@ -14,7 +14,10 @@ services:
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=http://qdrant:6333
       - NEO4J_URI=bolt://neo4j:7687
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-finsight_dev}@redis:6379
+      - NEO4J_USER=${NEO4J_USER:?Set NEO4J_USER in .env}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      - NEO4J_DATABASE=${NEO4J_DATABASE:?Set NEO4J_DATABASE in .env}
+      - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
       - HF_HOME=/root/.cache/huggingface
       - FASTEMBED_CACHE_PATH=/root/.cache/fastembed
     env_file:
@@ -59,7 +62,10 @@ services:
       - PYTHONPATH=/app
       - QDRANT_URL=http://qdrant:6333
       - NEO4J_URI=bolt://neo4j:7687
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-finsight_dev}@redis:6379
+      - NEO4J_USER=${NEO4J_USER:?Set NEO4J_USER in .env}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      - NEO4J_DATABASE=${NEO4J_DATABASE:?Set NEO4J_DATABASE in .env}
+      - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
       - HF_HOME=/root/.cache/huggingface
       - FASTEMBED_CACHE_PATH=/root/.cache/fastembed
     env_file:
@@ -92,10 +98,10 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-finsight_dev}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-finsight_dev}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -109,11 +115,11 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
     environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-finsight-neo4j}
+      - NEO4J_AUTH=${NEO4J_AUTH:?Set NEO4J_AUTH in .env}
       - NEO4J_dbms_security_auth__enabled=true
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-finsight-neo4j} 'RETURN 1'"]
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:?Set NEO4J_USER in .env} -p ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env} 'RETURN 1'"]
       interval: 10s
       timeout: 5s
       retries: 6
