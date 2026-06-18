@@ -47,10 +47,8 @@ class Settings(BaseSettings):
     NEO4J_DATABASE: str = "neo4j"
 
     # --- Retrieval ---
-    # hybrid = existing dense+sparse RRF path
-    # fusion = vector RAG + PageIndex-style section retrieval, reranked together
-    RETRIEVAL_MODE: str = "hybrid"
-    SECTION_REASONER_CACHE_TTL_SECONDS: int = 604800  # 7 days
+    # SEC filings use Qdrant dense+sparse hybrid retrieval with section filters.
+    # Uploaded documents use MarkItDown -> PageIndex-style structure -> Neo4j.
 
     # --- Document Uploads ---
     DOCUMENT_UPLOAD_MAX_BYTES: int = 25 * 1024 * 1024

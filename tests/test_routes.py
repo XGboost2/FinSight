@@ -174,9 +174,11 @@ class TestDocumentIngest:
         assert mock_graph_ingest.call_args.args[2]["ticker"] == "SNDK"
         assert mock_graph_ingest.call_args.args[2]["company_name"] == "SanDisk Corporation"
         assert mock_graph_ingest.call_args.args[2]["selected_ticker"] == "AAPL"
-        assert mock_graph_ingest.call_args.args[3] == chunks
+        assert mock_graph_ingest.call_args.args[3][0]["item"] == "DOCUMENT"
+        assert mock_graph_ingest.call_args.args[3][0]["pageindex_section"] == "Document"
         mock_register.assert_called_once()
         assert mock_register.call_args.args[3]["filed_date"] == body["filed_date"]
+        assert mock_register.call_args.args[3]["structure"] == "pageindex"
         assert mock_register.call_args.kwargs["filing_type"] == "CUSTOM-DOC"
 
     def test_upload_returns_503_when_markitdown_missing(self, client, mock_redis):
@@ -360,6 +362,43 @@ class TestChat:
         assert "Apple risk factors" in context
         assert "Path neo4j_vectorless_graph" in context
         assert f"Filing {FILING_ID}" in context
+
+    def test_compare_uploaded_graph_doc_revenue_expands_to_financial_statement_query(self, client, mock_redis):
+        graph_chunks = [{
+            "filing_id": "upload-sandisk",
+            "chunk_index": 7,
+            "text": "SanDisk consolidated statements of operations net revenue was $9.5 billion.",
+            "retrieval_path": "neo4j_vectorless_graph",
+        }]
+        vector_chunks = [{
+            "filing_id": FILING_ID,
+            "chunk_index": 8,
+            "text": "Apple net sales were $391.0 billion.",
+            "retrieval_path": "qdrant_hybrid",
+        }]
+
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.is_ingested", return_value=True), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
+             patch("api.routes.list_ingested", return_value=[]), \
+             patch("api.routes.graph_exists", return_value=True), \
+             patch("api.routes.retrieve_graph", return_value=graph_chunks) as mock_graph, \
+             patch("api.routes.rag_retrieve", return_value=vector_chunks) as mock_vector, \
+             patch("api.routes.ask_llm", new_callable=AsyncMock, return_value=LLM_RESULT) as mock_llm:
+            r = client.post("/api/chat", json={
+                "ticker": TICKER,
+                "filing_id": "upload-sandisk",
+                "question": "compare revenue of apple and sandisk",
+            })
+
+        assert r.status_code == 200
+        graph_queries = [call.args[2] for call in mock_graph.call_args_list]
+        vector_queries = [call.args[0] for call in mock_vector.call_args_list]
+        assert any("consolidated statements of operations" in q for q in graph_queries)
+        assert any("net sales" in q for q in vector_queries)
+        context = mock_llm.call_args.args[1]
+        assert "SanDisk consolidated statements" in context
+        assert "Apple net sales" in context
 
 
 class TestAdmin:

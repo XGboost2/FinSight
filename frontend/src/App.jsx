@@ -225,7 +225,7 @@ export default function App() {
               </PanelResizeHandle>
 
               <Panel defaultSize={38} minSize={20} className="panel">
-                <div className="panel-scroll">
+                <div className="panel-scroll filing-col">
                   <FilingPanel
                     ticker={primary?.ticker ?? null}
                     companyName={primary?.name ?? ''}

@@ -2,7 +2,7 @@
 
 **Financial Risk Intelligence Platform** — ingests SEC EDGAR 10-K, 10-Q, and 8-K filings, supports user-uploaded business documents, stores filings across vector and graph retrieval layers, and delivers AI-powered fundamental analysis grounded in source documents.
 
-Built as a portfolio project demonstrating production-grade AI engineering: LangGraph multi-agent pipeline with Pydantic AI typed contracts, dual RAG retrieval (Qdrant vector RAG + PageIndex-style vectorless retrieval), Neo4j graph RAG for uploaded documents, MarkItDown multi-format document conversion, cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, DeepEval evaluation baseline, multi-provider LLM routing with cost tracking, and a fully reactive analyst UI.
+Built as a portfolio project demonstrating production-grade AI engineering: LangGraph multi-agent pipeline with Pydantic AI typed contracts, Qdrant hybrid RAG for SEC filings, Neo4j graph RAG for uploaded documents, MarkItDown multi-format document conversion, PageIndex-style document structure extraction, cross-encoder reranking, Celery background ingestion, deterministic XBRL financial parsing, FinBERT sentiment analysis, DeepEval evaluation baseline, multi-provider LLM routing with cost tracking, and a fully reactive analyst UI.
 
 ---
 
@@ -10,7 +10,7 @@ Built as a portfolio project demonstrating production-grade AI engineering: Lang
 
 Search any SEC-registered company → FinSight fetches its latest filings from EDGAR, embeds them into a hybrid vector store, and generates a comprehensive equity research report in the style of a professional analyst note — with risk scoring, sentiment analysis, YoY risk diff, technical indicators, and a bull/bear debate transcript.
 
-Upload a custom document → FinSight converts it with Microsoft MarkItDown, chunks it, stores it in Neo4j as a `Document → Section → Chunk` graph, and lets the chat endpoint answer against that uploaded document through a vectorless graph RAG path.
+Upload a custom document → FinSight converts it with Microsoft MarkItDown, cleans and chunks it, adds PageIndex-style section metadata, stores it in Neo4j as a `Document → Section → Chunk` graph, and lets the chat endpoint answer against that uploaded document through a vectorless graph RAG path.
 
 ---
 
@@ -24,7 +24,8 @@ Upload a custom document → FinSight converts it with Microsoft MarkItDown, chu
 | **8-K Event Classification** | Classifies 8-K filings by EDGAR item number (`2.02` → Earnings, `5.02` → Leadership Change, `1.01` → Acquisition, etc.) — deterministic, zero LLM cost |
 | **XBRL Financial Parser** | Revenue, net income, gross margin, YoY growth pulled directly from SEC EDGAR XBRL API — exact numbers, no LLM extraction |
 | **Paragraph-Aware Chunker** | 1000-char chunks with 200-char overlap across 10-K sections. Preserves paragraph boundaries to prevent context loss at chunk edges |
-| **MarkItDown Upload Conversion** | `POST /api/documents/ingest` accepts uploaded business documents, converts them to Markdown-like text with Microsoft MarkItDown, chunks the result, and registers the file as a chat-ready document |
+| **MarkItDown Upload Conversion** | `POST /api/documents/ingest` accepts uploaded PDFs, Office files, spreadsheets, HTML, CSV, JSON, XML, and text files, converts them to Markdown-like text with Microsoft MarkItDown, chunks the result, and registers the file as a chat-ready document |
+| **PageIndex Upload Structure** | Uploaded documents are enriched with deterministic PageIndex-style heading/section metadata before graph insertion, so custom files get inspectable structure even when they are not SEC filings |
 
 ### RAG Pipeline
 | Feature | Detail |
@@ -34,9 +35,8 @@ Upload a custom document → FinSight converts it with Microsoft MarkItDown, chu
 | **Cross-Encoder Reranker** | `BAAI/bge-reranker-base` (280MB ONNX, CPU) rescores top-20 RRF candidates for true relevance. Catches cases where similarity ≠ relevance — e.g. "supply chain risks" → "Geographic Concentration Risk" section |
 | **Cross-Filing Retrieval** | RAG search across 10-K + 10-Q simultaneously via Qdrant `MatchAny` filter. Enables quarterly trend questions over annual filings |
 | **Multi-Query Retrieval** | Chat endpoint issues both the original question and section-targeted rephrasing to improve recall on topic-specific queries |
-| **Fusion Retrieval Mode** | Optional `RETRIEVAL_MODE=fusion` combines vector RAG with PageIndex-style vectorless section retrieval, dedupes candidates by filing/chunk, then reranks the final set |
-| **LLM Section Reasoner** | Uses `CHEAP_MODEL` to infer likely filing sections for a question, caches decisions in Redis, and falls back to deterministic regex routing if the LLM helper fails |
-| **Neo4j Graph RAG** | Uploaded documents are stored locally in Neo4j as `Document → Section → Chunk` and retrieved through lexical + section-aware vectorless scoring. Useful for explainable graph-backed RAG demos |
+| **SEC Filing RAG** | SEC 10-K/10-Q/8-K retrieval uses XBRL where exact financial facts matter, content-aware SEC chunking, Qdrant dense+sparse hybrid search, section filters, and cross-encoder reranking |
+| **Neo4j Graph RAG** | Uploaded documents are stored locally in Neo4j as `Document → Section → Chunk` with PageIndex metadata and retrieved through lexical + section-aware vectorless scoring. Useful for explainable graph-backed RAG demos |
 
 ### AI Analysis
 | Feature | Detail |
@@ -113,7 +113,7 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       ├── rag/
       │     embedder.py              ← fastembed + BAAI/bge-base-en-v1.5 (ONNX, CPU, 768-dim)
       │     retriever.py             ← Qdrant hybrid search (dense + sparse, RRF fusion)
-      │     pipeline.py              ← ingest / retrieve / retrieve_multi + fusion retrieval (with reranking)
+      │     pipeline.py              ← ingest / retrieve / retrieve_multi + Qdrant hybrid retrieval (with reranking)
       │     reranker.py              ← BAAI/bge-reranker-base cross-encoder (ONNX, CPU)
       │     graph_store.py           ← Neo4j uploaded-document graph RAG
       │
@@ -158,7 +158,7 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
 User query
     ↓
 Section intent detection — regex routes query to Item numbers
-  e.g. "risk" → Item 1A only · "revenue" → Item 7 only
+  e.g. "risk" → Item 1A only · "revenue" → Item 7 + Item 8
     ↓
 BGE embed (query) + sparse encode
     ↓
@@ -175,26 +175,6 @@ Top 3 chunks (section-filtered) or top 5 (unfiltered) → LLM context
 
 Section routing reduced hallucination by 30% (0.20 → 0.14) by eliminating irrelevant chunks before they reach the LLM.
 
-### Fusion RAG Pipeline
-
-```
-User query
-    ↓
-LLM section reasoner + regex fallback
-    ↓
-Two candidate generators
-  ├── Vector path: Qdrant dense+sparse retrieval
-  └── Vectorless path: PageIndex-style section/chunk retrieval
-    ↓
-Deduplicate by (filing_id, chunk_index)
-    ↓
-Cross-encoder reranker
-    ↓
-Top evidence chunks → LLM context
-```
-
-This mode is controlled with `RETRIEVAL_MODE=fusion`. The default remains `hybrid` so the existing Qdrant path is stable, while the fusion path can be enabled for experiments and demos.
-
 ### Uploaded Document Graph RAG
 
 ```
@@ -202,7 +182,11 @@ Upload file
     ↓
 MarkItDown conversion
     ↓
+Document cleaner
+    ↓
 Paragraph-aware chunking
+    ↓
+PageIndex-style section extraction
     ↓
 Neo4j graph insert
   (:Document)-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(:Chunk)
@@ -214,7 +198,23 @@ Neo4j vectorless graph retrieval
 LLM grounded answer
 ```
 
-Uploaded documents use Neo4j rather than Qdrant embeddings so the project can demonstrate graph-backed RAG with an inspectable local graph database.
+Uploaded documents use Neo4j rather than Qdrant embeddings so the project can demonstrate graph-backed RAG with an inspectable local graph database. PageIndex is scoped to this upload path: it creates section metadata for arbitrary PDFs, Office files, HTML, spreadsheets, JSON/XML, and text files after MarkItDown conversion. SEC filings stay on the XBRL + Qdrant hybrid path because their structure and financial facts are already parsed deterministically.
+
+### Chat Retrieval Routing
+
+```
+SEC filing question
+    ↓
+XBRL facts + Qdrant hybrid retrieval + reranker
+    ↓
+Uploaded document question
+    ↓
+Neo4j PageIndex-backed graph retrieval
+    ↓
+Combined context → LLM
+```
+
+The chat endpoint can mix both sources in one answer. For example, if Apple SEC filings are already in Qdrant and a manually downloaded Sandisk 10-K was uploaded into Neo4j, a comparison question can retrieve Apple evidence from Qdrant and Sandisk evidence from the graph path before calling the LLM.
 
 ### LLM Routing
 
@@ -365,12 +365,6 @@ NEO4J_PASSWORD=replace_with_local_neo4j_password
 NEO4J_AUTH=neo4j/replace_with_local_neo4j_password
 NEO4J_DATABASE=neo4j
 
-# Retrieval mode
-# hybrid = existing Qdrant dense+sparse RRF path
-# fusion = Qdrant vector RAG + PageIndex-style vectorless retrieval + reranking
-RETRIEVAL_MODE=hybrid
-SECTION_REASONER_CACHE_TTL_SECONDS=604800
-
 # Uploads
 DOCUMENT_UPLOAD_MAX_BYTES=26214400
 
@@ -410,7 +404,7 @@ finsight-ai/
 │   ├── rag/
 │   │   ├── embedder.py                ← fastembed BGE wrapper
 │   │   ├── retriever.py               ← Qdrant hybrid search (dense + sparse, RRF)
-│   │   ├── pipeline.py                ← ingest / retrieve / retrieve_multi + fusion retrieval + reranking
+│   │   ├── pipeline.py                ← ingest / retrieve / retrieve_multi + Qdrant hybrid retrieval + reranking
 │   │   ├── graph_store.py             ← Neo4j uploaded-document graph RAG
 │   │   └── reranker.py                ← BGE cross-encoder reranker (ONNX, CPU)
 │   ├── services/
@@ -456,7 +450,7 @@ finsight-ai/
     ├── conftest.py
     ├── test_routes.py
     ├── test_graph_store.py            ← Neo4j graph RAG unit tests with fake driver/session
-    ├── test_rag_pipeline.py           ← fusion retrieval / section-reasoning tests
+    ├── test_rag_pipeline.py           ← Qdrant hybrid retrieval and section-filter tests
     └── eval_baseline/
         ├── run_eval.py                ← DeepEval runner — 6 metrics, custom DeepSeekJudge, caching
         ├── questions.json             ← 20 hand-curated Q&A pairs with ground truth across 5 tickers
@@ -509,8 +503,9 @@ finsight-ai/
 - [x] **LLM-as-judge** — `services/judge.py` scores every pipeline run on 4 dimensions (faithfulness, risk coverage, debate quality, recommendation clarity) and pushes all 5 scores to Langfuse via `create_score()`. Uses `CHEAP_MODEL` (Kimi), never raises
 - [x] **Langfuse session grouping** — chat turns linked to Langfuse sessions via `propagate_attributes(session_id=...)`. Full conversation replay visible in Langfuse dashboard
 - [x] **Kimi/Moonshot AI primary LLM** — migrated from DeepSeek to `kimi-k2.6` as primary. 256k context, $0.15/$0.60 per 1M tokens. DeepSeek Flash retained as secondary fallback
-- [x] **Dual RAG retrieval** — optional fusion mode combines Qdrant vector retrieval with PageIndex-style vectorless section retrieval, dedupes candidates, and reranks the merged evidence set
+- [x] **Qdrant SEC filing RAG** — SEC filings use XBRL facts, content-aware chunking, dense+sparse Qdrant retrieval, section filters, and reranking
 - [x] **MarkItDown document uploads** — upload endpoint converts many business file formats into Markdown-like text before chunking
+- [x] **PageIndex upload structure** — converted uploads get PageIndex-style section metadata before Neo4j insertion
 - [x] **Neo4j graph RAG for uploads** — local graph database stores uploaded documents as `Document → Section → Chunk`; chat can target a specific uploaded `filing_id`
 
 ### Planned
@@ -542,9 +537,11 @@ finsight-ai/
 
 **Why LangGraph as orchestrator?** The analysis pipeline is a DAG with parallel branches and a fan-in synthesis step — exactly what `StateGraph` is built for. LangGraph provides checkpointing, typed state, and explicit node/edge definitions. Plain `asyncio.gather` would work but gives no observability, resumption, or state inspection.
 
-**Why dual RAG instead of only vector search?** Embeddings are strong for semantic similarity, but SEC filings have predictable structure. Risk questions often map to Item 1A, revenue questions to MD&A, and recent event questions to 8-K content. The fusion path combines vector recall with PageIndex-style section retrieval, then reranks the merged evidence so the LLM receives fewer irrelevant chunks.
+**Why keep SEC filings on Qdrant instead of PageIndex?** SEC filings already have deterministic structure through XBRL facts and 10-K/10-Q/8-K item sections. Qdrant hybrid retrieval gives scalable semantic + exact-term recall, while section filters keep the context grounded. PageIndex is more useful for arbitrary uploaded documents where the app has to recover structure from converted Markdown.
 
 **Why MarkItDown for uploads?** Real business users upload PDFs, Office files, spreadsheets, HTML, CSV, JSON, XML, and plain text. MarkItDown provides a common conversion layer into Markdown-like text, which keeps ingestion maintainable instead of writing one parser per file type.
+
+**Why PageIndex for uploads?** Uploaded files are not guaranteed to follow SEC item structure. PageIndex-style extraction turns headings and converted document layout into section metadata before graph storage, which makes retrieval more explainable without requiring embeddings for every custom file.
 
 **Why Neo4j for uploaded-document RAG?** Uploaded files naturally have document structure: documents contain sections, sections contain chunks, and future versions can connect chunks to companies, risks, dates, events, and metrics. Neo4j makes those relationships explicit and inspectable. Qdrant remains the better fit for high-volume vector similarity search, so the system uses both databases for different retrieval jobs.
 
@@ -554,23 +551,24 @@ finsight-ai/
 
 ### Day 60 — 2026-06-17
 
-**Dual RAG and Graph RAG**
-- Added `RETRIEVAL_MODE=hybrid|fusion`. `fusion` combines Qdrant vector retrieval with PageIndex-style vectorless section retrieval, dedupes by `(filing_id, chunk_index)`, and reranks the final candidate set
-- Added LLM section reasoner using `CHEAP_MODEL`, Redis cache key `llm_cache:sections:*`, 7-day TTL, and regex fallback
+**SEC RAG and Graph RAG**
+- Reverted SEC filing retrieval to the stable Qdrant hybrid path: dense+sparse RRF retrieval, SEC item filters, and cross-encoder reranking
+- Kept XBRL as the authoritative path for exact financial facts such as revenue, net income, gross margin, and YoY growth
 - Added `backend/rag/graph_store.py` with Neo4j local graph RAG for uploaded documents
 - Graph model: `(:Document)-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(:Chunk)`
 - Added Neo4j schema setup for unique `Document.filing_id` plus section/chunk indexes
 
 **Document Uploads**
 - Added `backend/ingestion/document_converter.py` using Microsoft MarkItDown
+- Added `backend/ingestion/pageindex.py` for PageIndex-style heading/section extraction on uploaded documents
 - Added `POST /api/documents/ingest` with multipart upload, ticker, filing type, company name, and filed date metadata
-- Upload path converts file → chunks text → stores filing metadata → inserts graph nodes into Neo4j → registers the filing for chat
+- Upload path converts file → cleans text → chunks text → enriches chunks with PageIndex metadata → inserts graph nodes into Neo4j → registers the filing for chat
 - Added optional `filing_id` to `/api/chat` so uploaded documents can be queried directly
 
 **Infrastructure and Tests**
 - Added Neo4j 5 Community service to Docker Compose with local browser on `127.0.0.1:7474` and Bolt on `127.0.0.1:7687`
 - Added `neo4j>=5.25.0`, `python-multipart`, and `markitdown[all]` dependencies
-- Added unit tests for fusion retrieval, upload ingestion, and Neo4j graph store behavior
+- Added unit tests for hybrid SEC retrieval, PageIndex upload enrichment, upload ingestion, and Neo4j graph store behavior
 
 ### Day 25 — 2026-06-08
 

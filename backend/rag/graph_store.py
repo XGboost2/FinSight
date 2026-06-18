@@ -4,9 +4,9 @@ Uploaded files are converted with MarkItDown, chunked, then stored in Neo4j:
 
     (:Document)-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(:Chunk)
 
-Retrieval is vectorless: it reads the graph, boosts structurally relevant SEC
-sections, and ranks chunks lexically. Official EDGAR filings can still use the
-Qdrant vector/fusion path; uploaded documents use this graph path.
+Retrieval is vectorless: it reads the graph, boosts structurally relevant
+sections, and ranks chunks lexically. Official EDGAR filings use the Qdrant
+hybrid path; uploaded documents use this graph path.
 """
 
 from __future__ import annotations
@@ -24,6 +24,18 @@ from config import get_settings
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9$%.-]{1,}")
+_REVENUE_QUERY_RE = re.compile(r"\b(revenue|sales|net sales|turnover)\b", re.I)
+_REVENUE_EVIDENCE_RE = re.compile(
+    r"\b(total revenue|total revenues|net sales|net revenue|net revenues|"
+    r"consolidated statements? of operations|consolidated statements? of income|"
+    r"statements? of operations|year ended|years ended)\b",
+    re.I,
+)
+_REVENUE_POLICY_RE = re.compile(
+    r"\b(revenue recognition|recognize revenue|recognized revenue|variable consideration|"
+    r"performance obligation|payment terms|sales incentives|price protection|rebates)\b",
+    re.I,
+)
 _SECTION_ROUTE: list[tuple[re.Pattern, list[str]]] = [
     (re.compile(r"risk|threat|challenge|uncertain|hazard|red flag", re.I), ["1A"]),
     (re.compile(r"cyber|breach|hack|security", re.I), ["1C", "1A"]),
@@ -141,6 +153,9 @@ def _create_document_graph(tx, filing_id: str, metadata: dict, chunks: list[dict
                 "text": chunk.get("text", ""),
                 "item": item,
                 "section": chunk.get("section") or "Document",
+                "pageindex_section_id": chunk.get("pageindex_section_id", ""),
+                "pageindex_section": chunk.get("pageindex_section", ""),
+                "pageindex_level": int(chunk.get("pageindex_level", 0) or 0),
                 "char_start": int(chunk.get("char_start", 0)),
                 "char_end": int(chunk.get("char_end", 0)),
             },
@@ -156,6 +171,9 @@ def _read_chunks(tx, filing_id: str) -> list[dict]:
                c.text AS text,
                c.item AS item,
                c.section AS section,
+               c.pageindex_section_id AS pageindex_section_id,
+               c.pageindex_section AS pageindex_section,
+               c.pageindex_level AS pageindex_level,
                c.char_start AS char_start,
                c.char_end AS char_end
         ORDER BY c.chunk_index ASC
@@ -200,6 +218,7 @@ def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
 
     query_counts = Counter(query_terms)
     routed_items = _route_items(question)
+    wants_revenue = bool(_REVENUE_QUERY_RE.search(question))
     doc_count = len(chunks)
     doc_freq: defaultdict[str, int] = defaultdict(int)
     chunk_tokens: list[tuple[dict, Counter[str]]] = []
@@ -214,6 +233,7 @@ def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
     scored: list[tuple[float, dict]] = []
     for chunk, counts in chunk_tokens:
         score = 0.0
+        chunk_text = chunk.get("text", "")
         for term, qtf in query_counts.items():
             tf = counts.get(term, 0)
             if tf:
@@ -222,6 +242,13 @@ def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
 
         if routed_items and chunk.get("item") in routed_items:
             score += 4.0
+        if wants_revenue:
+            if chunk.get("item") == "8":
+                score += 5.0
+            if _REVENUE_EVIDENCE_RE.search(chunk_text):
+                score += 6.0
+            if _REVENUE_POLICY_RE.search(chunk_text):
+                score -= 5.0
         if score > 0:
             scored.append((score, chunk))
 

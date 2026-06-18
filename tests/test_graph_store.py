@@ -114,3 +114,31 @@ def test_retrieve_graph_is_vectorless_and_section_aware(monkeypatch):
 
     assert results[0]["chunk_index"] == 1
     assert results[0]["retrieval_path"] == "neo4j_vectorless_graph"
+
+
+def test_retrieve_graph_revenue_prefers_financial_statement_over_policy(monkeypatch):
+    driver = FakeDriver()
+    monkeypatch.setattr(graph_store, "_driver", lambda: driver)
+    monkeypatch.setattr(graph_store, "_database", lambda: "neo4j")
+
+    driver.state["exists"] = True
+    driver.state["chunks"] = [
+        {
+            "filing_id": "upload-1",
+            "chunk_index": 10,
+            "item": "8",
+            "section": "Financial Statements",
+            "text": "Consolidated Statements of Operations years ended 2025 2024 2023 Net revenue $9,500 $8,200 $7,900.",
+        },
+        {
+            "filing_id": "upload-1",
+            "chunk_index": 20,
+            "item": "8",
+            "section": "Financial Statements",
+            "text": "Revenue recognition policy variable consideration payment terms rebates and price protection.",
+        },
+    ]
+
+    results = graph_store.retrieve_graph(None, "upload-1", "Compare revenue", top_k=1)
+
+    assert results[0]["chunk_index"] == 10

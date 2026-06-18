@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import rag.pipeline as pipeline
 
 
@@ -36,13 +34,10 @@ def test_hybrid_retrieve_keeps_existing_section_filter(monkeypatch):
     assert rerank_calls == [{"count": 6, "top_k": 3}]
 
 
-def test_fusion_retrieve_combines_vector_and_section_paths(monkeypatch):
+def test_hybrid_revenue_retrieve_includes_financial_statements(monkeypatch):
     search_calls = []
-    section_calls = []
-    rerank_calls = []
 
-    monkeypatch.setattr(pipeline, "_retrieval_mode", lambda: "fusion")
-    monkeypatch.setattr(pipeline, "reason_sections", lambda question, filing_scope: ["7"])
+    monkeypatch.setattr(pipeline, "_retrieval_mode", lambda: "hybrid")
     monkeypatch.setattr(pipeline, "embed_query", lambda question: [0.1])
     monkeypatch.setattr(pipeline, "sparse_encode", lambda text: ([1], [1.0]))
 
@@ -52,53 +47,41 @@ def test_fusion_retrieve_combines_vector_and_section_paths(monkeypatch):
             "top_k": top_k,
             "item_filter": item_filter,
         })
-        return [
-            {"chunk_index": i, "filing_id": filing_id, "text": f"vector chunk {i}", "score": 0.5}
-            for i in range(1, 6)
-        ]
-
-    def fake_get_section_chunks(filing_id, item, limit):
-        section_calls.append({"filing_id": filing_id, "item": item, "limit": limit})
-        return [
-            {"chunk_index": 3, "filing_id": filing_id, "text": "duplicate section chunk", "score": 0.0},
-            {"chunk_index": 8, "filing_id": filing_id, "text": "section-only chunk", "score": 0.0},
-        ]
-
-    def fake_rerank(question, chunks, top_k):
-        rerank_calls.append([chunk["chunk_index"] for chunk in chunks])
-        return chunks[:top_k]
+        return [{"chunk_index": 1, "filing_id": filing_id, "text": "net sales", "score": 0.5}]
 
     monkeypatch.setattr(pipeline, "search", fake_search)
-    monkeypatch.setattr(pipeline, "get_section_chunks", fake_get_section_chunks)
-    monkeypatch.setattr(pipeline, "rerank", fake_rerank)
+    monkeypatch.setattr(pipeline, "rerank", lambda question, chunks, top_k: chunks[:top_k])
 
-    chunks = pipeline.retrieve("How did margins change?", "filing-1", top_k=5)
+    pipeline.retrieve("Compare revenue", "filing-1", top_k=5)
 
-    assert len(chunks) == 5
-    assert search_calls == [{"filing_id": "filing-1", "top_k": 20, "item_filter": None}]
-    assert section_calls == [{"filing_id": "filing-1", "item": "7", "limit": 40}]
-    assert rerank_calls == [
-        [1, 2, 3, 4, 5],  # vector path top 5
-        [3, 8],           # vectorless section path top 5
-        [1, 2, 3, 4, 5, 8],
-    ]
+    assert search_calls == [{"filing_id": "filing-1", "top_k": 12, "item_filter": ["7", "8"]}]
 
 
-def test_reason_sections_uses_cache(monkeypatch):
-    redis = SimpleNamespace(
-        get=lambda key: '["7", "1A"]',
-        setex=lambda *args: None,
-    )
+def test_multi_retrieve_uses_hybrid_section_filter(monkeypatch):
+    search_calls = []
 
-    monkeypatch.setattr(pipeline, "get_settings", lambda: SimpleNamespace(SECTION_REASONER_CACHE_TTL_SECONDS=604800))
+    monkeypatch.setattr(pipeline, "embed_query", lambda question: [0.1])
+    monkeypatch.setattr(pipeline, "sparse_encode", lambda text: ([1], [1.0]))
 
-    def fake_get_redis():
-        return redis
+    def fake_search_multi(query_vector, query_sparse, filing_ids, top_k, item_filter):
+        search_calls.append({
+            "filing_ids": filing_ids,
+            "top_k": top_k,
+            "item_filter": item_filter,
+        })
+        return [
+            {"chunk_index": i, "filing_id": filing_ids[0], "text": f"risk chunk {i}", "score": 0.5}
+            for i in range(5)
+        ]
 
-    import cache.redis_client
+    monkeypatch.setattr(pipeline, "search_multi", fake_search_multi)
+    monkeypatch.setattr(pipeline, "rerank", lambda question, chunks, top_k: chunks[:top_k])
 
-    monkeypatch.setattr(cache.redis_client, "get_redis", fake_get_redis)
+    chunks = pipeline.retrieve_multi("Compare the risks", ["filing-1", "filing-2"], top_k=5)
 
-    items = pipeline.reason_sections("How is the company performing?", "filing-1")
-
-    assert items == ["7", "1A"]
+    assert len(chunks) == 3
+    assert search_calls == [{
+        "filing_ids": ["filing-1", "filing-2"],
+        "top_k": 12,
+        "item_filter": ["1A"],
+    }]

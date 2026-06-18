@@ -37,6 +37,7 @@ from ingestion.document_converter import (
     DocumentConversionUnavailable,
     convert_document_bytes,
 )
+from ingestion.pageindex import enrich_chunks_with_pageindex
 from ingestion.edgar import fetch_and_extract
 from models.schemas import (
     AnalysisReport,
@@ -370,6 +371,7 @@ async def ingest_document(
     filing_id = f"upload-{digest}"
 
     chunks = chunk_text(converted.text, chunk_size=1000, chunk_overlap=200, source_id=filing_id)
+    chunks = enrich_chunks_with_pageindex(converted.text, chunks)
     if not chunks:
         raise HTTPException(422, "Converted document produced no chunks")
 
@@ -381,6 +383,7 @@ async def ingest_document(
         "filed_date": filed_date,
         "filename": converted.filename,
         "source": "markitdown",
+        "structure": "pageindex",
         "selected_ticker": selected_ticker,
         "selected_company_name": selected_company,
         "text": converted.text,
@@ -394,6 +397,7 @@ async def ingest_document(
         "chunk_count": len(chunks),
         "filename": converted.filename,
         "source": "markitdown",
+        "structure": "pageindex",
         "original_filing_type": filing_type,
         "retrieval": "neo4j_vectorless_graph",
     }, filing_type="CUSTOM-DOC")
@@ -816,6 +820,7 @@ async def chat(
                 ticker, sid or "none", request_body.question[:80])
 
     explicit_filing_id = _validate_filing_id(request_body.filing_id) if request_body.filing_id else None
+    is_comparison = _is_comparison_question(request_body.question)
     if explicit_filing_id:
         filing_id = explicit_filing_id
     else:
@@ -826,7 +831,7 @@ async def chat(
     cache_scope = f"{ticker}:{filing_id}" if explicit_filing_id else ticker
 
     # ── Session answer cache hit ──────────────────────────────────────
-    if sid:
+    if sid and not is_comparison:
         cached = get_cached_answer(redis, sid, cache_scope, request_body.question)
         if cached:
             logger.info("Chat cache hit: session=%s ticker=%s", sid, ticker)
@@ -847,7 +852,7 @@ async def chat(
     if explicit_filing_id:
         all_filing_ids = [filing_id]
         vector_filing_ids = []
-        if _is_comparison_question(request_body.question) and is_ingested(redis, ticker):
+        if is_comparison and is_ingested(redis, ticker):
             ticker_record = get_filing_record(redis, ticker)
             if ticker_record:
                 ten_q_ids = [
@@ -886,7 +891,8 @@ async def chat(
     section_queries = {
         "outlook": "management discussion analysis future outlook guidance strategy",
         "risk":    "risk factors material risks regulatory competition",
-        "revenue": "revenue growth financial performance results of operations",
+        "revenue": "total revenue net sales consolidated statements of operations financial statements year ended",
+        "sales":   "total revenue net sales consolidated statements of operations financial statements year ended",
         "future":  "management discussion analysis future outlook guidance strategy",
         "plan":    "management discussion analysis strategy future plans",
         "expect":  "management discussion analysis outlook expectations guidance",
@@ -896,28 +902,33 @@ async def chat(
     extra_query = next(
         (v for k, v in section_queries.items() if k in request_body.question.lower()), None
     )
+    query_sequence = [request_body.question] + ([extra_query] if extra_query else [])
+    if extra_query and re.search(r"\b(revenue|sales)\b", request_body.question, re.I):
+        query_sequence = [extra_query, request_body.question]
 
     seen: set = set()
     relevant_chunks = []
     graph_mode = explicit_filing_id and graph_exists(redis, filing_id)
     if graph_mode:
-        for q in ([request_body.question] + ([extra_query] if extra_query else [])):
-            for c in retrieve_graph(redis, filing_id, q, top_k=5):
+        for q in query_sequence:
+            retrieval_top_k = 8 if extra_query and q == extra_query else 5
+            for c in retrieve_graph(redis, filing_id, q, top_k=retrieval_top_k):
                 chunk_key = (c.get("filing_id", ""), c["chunk_index"])
                 if chunk_key not in seen:
                     seen.add(chunk_key)
                     relevant_chunks.append(c)
             if vector_filing_ids:
                 retriever = rag_retrieve_multi if len(vector_filing_ids) > 1 else lambda query, ids, **kw: rag_retrieve(query, ids[0], **kw)
-                for c in retriever(q, vector_filing_ids, top_k=5):
+                for c in retriever(q, vector_filing_ids, top_k=retrieval_top_k):
                     chunk_key = (c.get("filing_id", ""), c["chunk_index"])
                     if chunk_key not in seen:
                         seen.add(chunk_key)
                         relevant_chunks.append(c)
     else:
         retriever = rag_retrieve_multi if len(all_filing_ids) > 1 else lambda q, ids, **kw: rag_retrieve(q, ids[0], **kw)
-        for q in ([request_body.question] + ([extra_query] if extra_query else [])):
-            for c in retriever(q, all_filing_ids, top_k=5):
+        for q in query_sequence:
+            retrieval_top_k = 8 if extra_query and q == extra_query else 5
+            for c in retriever(q, all_filing_ids, top_k=retrieval_top_k):
                 chunk_key = (c.get("filing_id", ""), c["chunk_index"])
                 if chunk_key not in seen:
                     seen.add(chunk_key)
@@ -958,7 +969,8 @@ async def chat(
     # ── Persist to session ────────────────────────────────────────────
     if sid:
         append_chat_turn(redis, sid, cache_scope, request_body.question, llm_result["answer"])
-        set_cached_answer(redis, sid, cache_scope, request_body.question, llm_result["answer"])
+        if not is_comparison:
+            set_cached_answer(redis, sid, cache_scope, request_body.question, llm_result["answer"])
 
     sources = [
         SourceChunk(chunk_index=c["chunk_index"], text_preview=c["text"][:200])

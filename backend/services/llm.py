@@ -103,6 +103,8 @@ def _calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
 CHEAP_MODEL = "kimi-k2.6"   # primary — simple lookups, structured extraction
 POWER_MODEL = "kimi-k2.6"   # primary — complex reasoning (same model, 256k context)
 CHEAP_FALLBACK = "deepseek-v4-flash"  # secondary if Kimi unavailable
+KIMI_MAX_TOKENS = 2048
+DEFAULT_MAX_TOKENS = 1024
 
 # Signals that a question needs multi-step reasoning
 _POWER_KEYWORDS = {
@@ -130,6 +132,30 @@ def _provider_has_key(provider: str, settings: Any) -> bool:
     if provider == "openai":
         return bool(settings.OPENAI_API_KEY)
     return False
+
+
+def _chat_message_text(message: Any) -> str:
+    """Extract text from OpenAI-compatible chat messages across providers."""
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text") or part.get("content")
+            else:
+                text = getattr(part, "text", None) or getattr(part, "content", None)
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        if parts:
+            return "\n".join(parts)
+
+    for attr in ("reasoning_content", "reasoning", "refusal"):
+        value = getattr(message, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 async def _call_provider(
@@ -295,10 +321,10 @@ async def call_llm_raw(
         m = model or CHEAP_MODEL
         client = AsyncOpenAI(api_key=settings.KIMI_API_KEY, base_url=settings.KIMI_BASE_URL)
         resp = await client.chat.completions.create(
-            model=m, max_tokens=max_tokens,
+            model=m, max_tokens=max(max_tokens, KIMI_MAX_TOKENS),
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.choices[0].message.content or ""
+        text = _chat_message_text(resp.choices[0].message)
         tok_in, tok_out = resp.usage.prompt_tokens, resp.usage.completion_tokens
 
     elif (not model or provider == "deepseek") and settings.DEEPSEEK_API_KEY:
@@ -409,7 +435,7 @@ async def _call_kimi(
 
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=KIMI_MAX_TOKENS,
         messages=messages,
     )
 
@@ -418,7 +444,7 @@ async def _call_kimi(
     tokens_out = usage.completion_tokens if usage else 0
 
     return {
-        "answer": response.choices[0].message.content or "",
+        "answer": _chat_message_text(response.choices[0].message),
         "model_used": model,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
@@ -445,7 +471,7 @@ async def _call_deepseek(
 
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=DEFAULT_MAX_TOKENS,
         messages=messages,
     )
 
@@ -454,7 +480,7 @@ async def _call_deepseek(
     tokens_out = usage.completion_tokens if usage else 0
 
     return {
-        "answer": response.choices[0].message.content or "",
+        "answer": _chat_message_text(response.choices[0].message),
         "model_used": model,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
