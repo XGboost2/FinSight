@@ -38,6 +38,10 @@ class Settings(BaseSettings):
 
     # --- Vector DB (Day 14+) ---
     QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_HNSW_M: int = 16
+    QDRANT_HNSW_EF_CONSTRUCT: int = 100
+    QDRANT_HNSW_FULL_SCAN_THRESHOLD: int = 10000
+    QDRANT_HNSW_EF_SEARCH: int = 128
     QDRANT_API_KEY: str = ""
 
     # --- Graph DB for uploaded-document RAG ---

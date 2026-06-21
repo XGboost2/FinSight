@@ -226,15 +226,14 @@ async def node_news(state: AnalysisState) -> dict:
         logger.warning("[news] fetch failed for %s: %s", ticker, e)
 
     try:
+        from cache.event_store import list_events
         from cache.redis_client import get_redis
         redis = get_redis()
-        raw   = redis.get(f"finsight:events:8-K:{ticker.upper()}")
-        if raw:
-            for ev in json.loads(raw)[-10:]:
-                try:
-                    events.append(Event8K.model_validate(ev))
-                except Exception:
-                    pass
+        for ev in list_events(redis, ticker)[:10]:
+            try:
+                events.append(Event8K.model_validate(ev))
+            except Exception:
+                pass
         logger.info("[news] %d 8-K events for %s", len(events), ticker)
     except Exception as e:
         errors.append(f"events: {e}")

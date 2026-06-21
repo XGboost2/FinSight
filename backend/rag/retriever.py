@@ -17,13 +17,18 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     Fusion,
     FusionQuery,
+    HnswConfigDiff,
     MatchAny,
     MatchValue,
     Modifier,
+    PointIdsList,
+    PayloadSchemaType,
     PointStruct,
     Prefetch,
+    SearchParams,
     SparseIndexParams,
     SparseVector,
     SparseVectorParams,
@@ -42,12 +47,61 @@ COLLECTION = "filings"
 
 @lru_cache(maxsize=1)
 def _client() -> QdrantClient:
-    return QdrantClient(url=get_settings().QDRANT_URL)
+    settings = get_settings()
+    return QdrantClient(
+        url=settings.QDRANT_URL,
+        api_key=settings.QDRANT_API_KEY or None,
+    )
+
+
+def _dense_search_params() -> SearchParams:
+    """Query-time HNSW accuracy/latency tradeoff for the dense branch."""
+    return SearchParams(
+        hnsw_ef=get_settings().QDRANT_HNSW_EF_SEARCH,
+        exact=False,
+    )
+
+
+def _ensure_payload_indexes(client: QdrantClient) -> None:
+    """Index fields used by filtered HNSW queries."""
+    payload_schema = client.get_collection(COLLECTION).payload_schema or {}
+    for field in ("filing_id", "item"):
+        if field not in payload_schema:
+            client.create_payload_index(
+                collection_name=COLLECTION,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD,
+                wait=True,
+            )
+            logger.info("Created Qdrant payload index: %s.%s", COLLECTION, field)
+
+
+def _ensure_hnsw_config(client: QdrantClient) -> None:
+    """Apply configured HNSW build settings to an existing collection."""
+    settings = get_settings()
+    current = client.get_collection(COLLECTION).config.hnsw_config
+    desired = {
+        "m": settings.QDRANT_HNSW_M,
+        "ef_construct": settings.QDRANT_HNSW_EF_CONSTRUCT,
+        "full_scan_threshold": settings.QDRANT_HNSW_FULL_SCAN_THRESHOLD,
+    }
+    if any(getattr(current, key, None) != value for key, value in desired.items()):
+        client.update_collection(
+            collection_name=COLLECTION,
+            hnsw_config=HnswConfigDiff(**desired),
+        )
+        logger.info(
+            "Updated Qdrant HNSW config: m=%d ef_construct=%d full_scan_threshold=%d",
+            settings.QDRANT_HNSW_M,
+            settings.QDRANT_HNSW_EF_CONSTRUCT,
+            settings.QDRANT_HNSW_FULL_SCAN_THRESHOLD,
+        )
 
 
 def ensure_collection() -> None:
     """Create hybrid collection (dense + sparse) if it doesn't exist."""
     client = _client()
+    settings = get_settings()
     existing = {c.name for c in client.get_collections().collections}
     if COLLECTION not in existing:
         client.create_collection(
@@ -61,8 +115,22 @@ def ensure_collection() -> None:
                     modifier=Modifier.IDF,
                 )
             },
+            hnsw_config=HnswConfigDiff(
+                m=settings.QDRANT_HNSW_M,
+                ef_construct=settings.QDRANT_HNSW_EF_CONSTRUCT,
+                full_scan_threshold=settings.QDRANT_HNSW_FULL_SCAN_THRESHOLD,
+            ),
         )
-        logger.info("Created hybrid Qdrant collection '%s' (dense 768-dim + sparse IDF)", COLLECTION)
+        logger.info(
+            "Created hybrid Qdrant collection '%s' "
+            "(dense %d-dim HNSW m=%d ef_construct=%d + sparse IDF)",
+            COLLECTION,
+            VECTOR_DIM,
+            settings.QDRANT_HNSW_M,
+            settings.QDRANT_HNSW_EF_CONSTRUCT,
+        )
+    _ensure_payload_indexes(client)
+    _ensure_hnsw_config(client)
 
 
 def _point_id(filing_id: str, chunk_index: int) -> str:
@@ -76,8 +144,26 @@ def upsert_chunks(
     embeddings: list[list[float]],
     sparse_vectors: list[tuple[list[int], list[float]]],
 ) -> None:
-    """Store dense + sparse vectors in Qdrant. Upsert = insert or overwrite."""
+    """Replace one filing's chunks without leaving stale higher-index points."""
     client = _client()
+    existing_ids: set[str | int] = set()
+    offset = None
+    filing_filter = Filter(
+        must=[FieldCondition(key="filing_id", match=MatchValue(value=filing_id))]
+    )
+    while True:
+        existing, offset = client.scroll(
+            collection_name=COLLECTION,
+            scroll_filter=filing_filter,
+            limit=256,
+            offset=offset,
+            with_payload=False,
+            with_vectors=False,
+        )
+        existing_ids.update(point.id for point in existing)
+        if offset is None:
+            break
+
     points = [
         PointStruct(
             id=_point_id(filing_id, chunk["chunk_index"]),
@@ -99,7 +185,38 @@ def upsert_chunks(
         for chunk, embedding, (sp_indices, sp_values) in zip(chunks, embeddings, sparse_vectors)
     ]
     client.upsert(collection_name=COLLECTION, points=points)
+    current_ids = {point.id for point in points}
+    stale_ids = list(existing_ids - current_ids)
+    if stale_ids:
+        client.delete(
+            collection_name=COLLECTION,
+            points_selector=PointIdsList(points=stale_ids),
+            wait=True,
+        )
+        logger.info(
+            "Deleted %d stale chunks while replacing filing %s",
+            len(stale_ids),
+            filing_id,
+        )
     logger.info("Upserted %d chunks for filing %s", len(points), filing_id)
+
+
+def delete_filing_chunks(filing_id: str) -> None:
+    """Delete all vectors for a filing ID, used for deterministic ID migrations."""
+    _client().delete(
+        collection_name=COLLECTION,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="filing_id",
+                        match=MatchValue(value=filing_id),
+                    )
+                ]
+            )
+        ),
+        wait=True,
+    )
 
 
 def search(
@@ -133,6 +250,7 @@ def search(
                 query=query_vector,
                 using="text-dense",
                 filter=filing_filter,
+                params=_dense_search_params(),
                 limit=top_k * 4,
             ),
         ],
@@ -180,6 +298,7 @@ def search_multi(
                 query=query_vector,
                 using="text-dense",
                 filter=filing_filter,
+                params=_dense_search_params(),
                 limit=top_k * 4,
             ),
         ],

@@ -128,6 +128,17 @@ class TestIngest:
         assert r.status_code == 200
         assert r.json()["ticker"] == "AAPL"
 
+    def test_force_is_forwarded_to_worker(self, client, mock_redis):
+        mock_task = MagicMock(id="test-task-id")
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.get_filing_record", return_value=FILING_RECORD), \
+             patch("api.routes.get_filing_by_ticker", return_value=STORED_FILING), \
+             patch("tasks.edgar_tasks.ingest_company_filings.delay", return_value=mock_task) as delay:
+            r = client.post(f"/api/companies/{TICKER}/ingest?force=true")
+
+        assert r.status_code == 200
+        delay.assert_called_once_with(TICKER, ["10-K", "10-Q", "8-K"], True)
+
 
 # ── Ingest Status ─────────────────────────────────────────────────────────────
 
@@ -192,6 +203,32 @@ class TestDocumentIngest:
 
         assert r.status_code == 503
         assert "markitdown" in r.json()["detail"].lower()
+
+    def test_upload_identity_hashes_full_file_content(self, client, mock_redis):
+        converted = ConvertedDocument(filename="same.pdf", text="Converted text", chars=14)
+        chunks = [{"id": "c1", "text": "Converted text", "chunk_index": 0}]
+
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.convert_document_bytes", return_value=converted), \
+             patch("api.routes.chunk_text", return_value=chunks), \
+             patch("api.routes.enrich_chunks_with_pageindex", side_effect=lambda _text, value: value), \
+             patch("api.routes.store_filing") as store, \
+             patch("api.routes.ingest_graph_document"), \
+             patch("api.routes.register_filing"):
+            first = client.post(
+                "/api/documents/ingest",
+                data={"ticker": TICKER, "filing_type": "CUSTOM-DOC"},
+                files={"file": ("same.pdf", b"a" * 600, "application/pdf")},
+            )
+            second = client.post(
+                "/api/documents/ingest",
+                data={"ticker": TICKER, "filing_type": "CUSTOM-DOC"},
+                files={"file": ("same.pdf", b"a" * 500 + b"b" * 100, "application/pdf")},
+            )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert store.call_args_list[0].args[0] != store.call_args_list[1].args[0]
 
 
 VALID_TASK_ID = "abcdef12-3456-7890-abcd-ef1234567890"  # valid hex UUID format

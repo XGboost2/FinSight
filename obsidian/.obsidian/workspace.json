@@ -1,0 +1,196 @@
+{
+  "main": {
+    "id": "4de441187915fce9",
+    "type": "split",
+    "children": [
+      {
+        "id": "8350f7dc754bb798",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "778eced83c3978fb",
+            "type": "leaf",
+            "state": {
+              "type": "canvas",
+              "state": {
+                "file": "Untitled.canvas",
+                "viewState": {
+                  "x": 0,
+                  "y": 0,
+                  "zoom": 0
+                }
+              },
+              "icon": "lucide-layout-dashboard",
+              "title": "Untitled"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "e460eccfe873054e",
+    "type": "split",
+    "children": [
+      {
+        "id": "109153ab2f07e08b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "1f82a737ce232c06",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "26e9f4bda499386a",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 258.5
+  },
+  "right": {
+    "id": "c1ff859a50ad27ea",
+    "type": "split",
+    "children": [
+      {
+        "id": "1006f69ca91aaaaa",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6b96e2e811b15ad5",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "2026-06-19.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for 2026-06-19"
+            }
+          },
+          {
+            "id": "6edb513769aa1902",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "2026-06-19.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from 2026-06-19"
+            }
+          },
+          {
+            "id": "56ece08bacce4405",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "b21eb76abae83ce2",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "ed7cad28fb62c775",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "2026-06-19.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of 2026-06-19"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "778eced83c3978fb",
+  "lastOpenFiles": [
+    "Untitled",
+    "2026-06-19.md",
+    "Untitled.canvas",
+    "pageindex.md",
+    "questions.md",
+    "Interview Prep.md",
+    "finsight_ultimate_interview_prep.md",
+    "finsight_pitch.md",
+    "finsight_interview_qa.md",
+    "New Folder With Items/questions.md",
+    "New Folder With Items/pageindex.md",
+    "New Folder With Items/finsight_ultimate_interview_prep.md",
+    "New Folder With Items/finsight_pitch.md",
+    "New Folder With Items/finsight_interview_qa.md",
+    "New Folder With Items/Interview Prep.md",
+    "New Folder With Items",
+    "what, why and why not.md"
+  ]
+}

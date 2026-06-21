@@ -33,6 +33,11 @@ def get_filing(filing_id: str) -> dict[str, Any] | None:
     return _store.get(filing_id)
 
 
+def delete_filing(filing_id: str) -> None:
+    """Remove a filing from the process-local compatibility store."""
+    _store.pop(filing_id, None)
+
+
 
 
 def get_filing_by_ticker(ticker: str) -> dict[str, Any] | None:

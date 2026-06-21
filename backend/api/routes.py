@@ -23,6 +23,7 @@ from fastapi.security import APIKeyHeader
 from limiter import limiter
 
 from config import get_settings
+from cache.event_store import list_events
 from cache.filing_registry import (
     get_filing_record,
     is_ingested,
@@ -262,7 +263,7 @@ async def ingest_company(request: Request, ticker: str, force: bool = False):
     # 10-K cached, only supplementary types missing (10-Q / 8-K)
     # → return 10-K immediately, fire background task (no polling needed)
     if ten_k_record and all(ft != "10-K" for ft in missing):
-        task = ingest_company_filings.delay(ticker, missing)
+        task = ingest_company_filings.delay(ticker, missing, force)
         logger.info("Ingest background (10-K cached): %s missing=%s task_id=%s", ticker, missing, task.id)
         return {
             "ticker": ticker,
@@ -276,7 +277,7 @@ async def ingest_company(request: Request, ticker: str, force: bool = False):
         }
 
     # 10-K itself is missing — queue task and return task_id for polling
-    task = ingest_company_filings.delay(ticker, missing)
+    task = ingest_company_filings.delay(ticker, missing, force)
     logger.info("Ingest queued (10-K missing): %s missing=%s task_id=%s", ticker, missing, task.id)
     return {
         "ticker": ticker,
@@ -365,8 +366,9 @@ async def ingest_document(
         selected_company,
     )
 
+    content_hash = hashlib.sha256(content).hexdigest()
     digest = hashlib.sha256(
-        f"{ticker}:{filing_type}:{file.filename}:{converted.text[:500]}".encode()
+        f"{ticker}:{filing_type}:{content_hash}".encode()
     ).hexdigest()[:12]
     filing_id = f"upload-{digest}"
 
@@ -382,6 +384,7 @@ async def ingest_document(
         "filing_type": filing_type,
         "filed_date": filed_date,
         "filename": converted.filename,
+        "content_hash": content_hash,
         "source": "markitdown",
         "structure": "pageindex",
         "selected_ticker": selected_ticker,
@@ -396,6 +399,7 @@ async def ingest_document(
         "filed_date": filed_date,
         "chunk_count": len(chunks),
         "filename": converted.filename,
+        "content_hash": content_hash,
         "source": "markitdown",
         "structure": "pageindex",
         "original_filing_type": filing_type,
@@ -422,11 +426,9 @@ async def ingest_document(
 @router.get("/companies/{ticker}/events")
 async def company_events(ticker: str):
     """Return classified 8-K events for a ticker from Redis."""
-    import json as _json
     ticker = _validate_ticker(ticker)
     redis = get_redis()
-    raw = redis.get(f"finsight:events:8-K:{ticker}")
-    events = _json.loads(raw) if raw else []
+    events = list_events(redis, ticker)
     return {"ticker": ticker, "events": events}
 
 
@@ -877,15 +879,13 @@ async def chat(
 
     # ── 8-K events from Redis (not in Qdrant — injected as text block) ─
     events_block = ""
-    raw_events = redis.get(f"finsight:events:8-K:{ticker.upper()}")
-    if raw_events:
-        events = json.loads(raw_events)[-10:]
-        if events:
-            events_block = "\n\nRECENT MATERIAL EVENTS (8-K filings):\n" + "\n".join(
-                f"- [{e.get('filed_date', '')}] {e.get('event_type', '').upper()}: "
-                f"{e.get('summary', e.get('headline', ''))[:200]}"
-                for e in events
-            )
+    events = list_events(redis, ticker)[:10]
+    if events:
+        events_block = "\n\nRECENT MATERIAL EVENTS (8-K filings):\n" + "\n".join(
+            f"- [{e.get('date', e.get('filed_date', ''))}] {e.get('event_type', '').upper()}: "
+            f"{e.get('summary', e.get('headline', ''))[:200]}"
+            for e in events
+        )
 
     # ── RAG retrieval across all filings ─────────────────────────────
     section_queries = {

@@ -31,7 +31,7 @@ Upload a custom document → FinSight converts it with Microsoft MarkItDown, cle
 | Feature | Detail |
 |---------|--------|
 | **BGE Embeddings** | `BAAI/bge-base-en-v1.5` via fastembed (ONNX, CPU-only, 768-dim). No PyTorch, no GPU. Matches OpenAI ada-002 quality at zero API cost |
-| **Hybrid Search** | Dense (cosine) + sparse (BM25/IDF) vectors in Qdrant, fused with Reciprocal Rank Fusion (RRF). Exact financial jargon (BM25) + semantic meaning (dense) |
+| **Hybrid HNSW Search** | Dense vectors use Qdrant's configurable HNSW ANN index; sparse BM25/IDF vectors use an inverted index. Reciprocal Rank Fusion merges both branches, with payload indexes for filing/section filters |
 | **Cross-Encoder Reranker** | `BAAI/bge-reranker-base` (280MB ONNX, CPU) rescores top-20 RRF candidates for true relevance. Catches cases where similarity ≠ relevance — e.g. "supply chain risks" → "Geographic Concentration Risk" section |
 | **Cross-Filing Retrieval** | RAG search across 10-K + 10-Q simultaneously via Qdrant `MatchAny` filter. Enables quarterly trend questions over annual filings |
 | **Multi-Query Retrieval** | Chat endpoint issues both the original question and section-targeted rephrasing to improve recall on topic-specific queries |
@@ -245,7 +245,7 @@ The chat endpoint can mix both sources in one answer. For example, if Apple SEC 
 | API | FastAPI 0.110+, Pydantic v2, uvicorn, slowapi (rate limiting) |
 | Embeddings | fastembed 0.3.6 + `BAAI/bge-base-en-v1.5` (ONNX, CPU, 768-dim) |
 | Reranker | `BAAI/bge-reranker-base` via fastembed (ONNX, CPU, 280MB) |
-| Vector DB | Qdrant 1.9+ — dense + sparse hybrid, RRF fusion, filing-scoped filters |
+| Vector DB | Qdrant 1.9+ — dense HNSW + sparse hybrid retrieval, RRF fusion, filing-scoped payload indexes |
 | Graph DB | Neo4j 5 Community — uploaded-document graph RAG, `Document → Section → Chunk` model |
 | Document Conversion | Microsoft MarkItDown — multi-format uploads converted into Markdown-like text for chunking |
 | Sentiment | `ProsusAI/finbert` via HuggingFace transformers (CPU, 110M params) |
@@ -353,6 +353,10 @@ FINNHUB_API_KEY=...
 # Infrastructure — values are passed to Docker at runtime from .env
 QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=
+QDRANT_HNSW_M=16
+QDRANT_HNSW_EF_CONSTRUCT=100
+QDRANT_HNSW_FULL_SCAN_THRESHOLD=10000
+QDRANT_HNSW_EF_SEARCH=128
 
 # Redis
 REDIS_PASSWORD=replace_with_local_redis_password
@@ -545,9 +549,23 @@ finsight-ai/
 
 **Why Neo4j for uploaded-document RAG?** Uploaded files naturally have document structure: documents contain sections, sections contain chunks, and future versions can connect chunks to companies, risks, dates, events, and metrics. Neo4j makes those relationships explicit and inspectable. Qdrant remains the better fit for high-volume vector similarity search, so the system uses both databases for different retrieval jobs.
 
+**How is ingestion made idempotent?** SEC accession numbers are the source-of-truth filing identity; ticker, form, and filing date are not unique enough. Redis keeps a per-accession filing history plus a separate latest-record index for fast dashboard lookups. Qdrant point IDs are deterministic UUIDs derived from `filing_id + chunk_index`, so retries overwrite matching chunks, and each replacement deletes stale higher-index points if chunking produces fewer chunks. 8-K events use an accession-keyed Redis hash, making concurrent insert-or-replace operations atomic instead of using a racing JSON read-modify-write list. Uploaded files use a full-file SHA-256 content hash, while `force=true` deliberately bypasses the registry but still writes to the same deterministic identities. This provides at-least-once task execution with effectively-once stored results.
+
 ---
 
 ## Changelog
+
+### Day 61 — 2026-06-18
+
+**Idempotent ingestion and deduplication**
+- Replaced ticker/form-level ingestion checks with exact SEC accession tracking while retaining a latest-filing index for existing APIs
+- Changed SEC filing IDs to derive from accession numbers, preventing same-day filing collisions
+- Added cleanup of vectors and process-local records created by the previous date-based ID scheme
+- Made retries, including 8-K ingestion and `force=true`, overwrite deterministic filing/chunk identities rather than append duplicates
+- Added Qdrant stale-point cleanup when a re-chunked filing contains fewer chunks
+- Moved classified 8-K events to an atomic accession-keyed Redis hash with legacy-list read compatibility
+- Changed uploaded-document identity to hash the complete file content instead of filename plus the first 500 converted characters
+- Added regression tests for filing history, latest-record selection, event deduplication, stale vector cleanup, force propagation, and upload identity
 
 ### Day 60 — 2026-06-17
 

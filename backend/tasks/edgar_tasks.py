@@ -13,7 +13,12 @@ logger = logging.getLogger(__name__)
     default_retry_delay=30,
     name="tasks.ingest_company_filings",
 )
-def ingest_company_filings(self, ticker: str, filing_types: list[str] | None = None) -> dict:
+def ingest_company_filings(
+    self,
+    ticker: str,
+    filing_types: list[str] | None = None,
+    force: bool = False,
+) -> dict:
     """
     Background task: run EDGAR agent for a ticker.
     Only fetches filing types in filing_types (defaults to all three).
@@ -32,7 +37,7 @@ def ingest_company_filings(self, ticker: str, filing_types: list[str] | None = N
         from services.store import get_filing_by_ticker
 
         self.update_state(state="PROGRESS", meta={"ticker": ticker, "step": f"Fetching {', '.join(filing_types)} from SEC EDGAR…"})
-        result = asyncio.run(run_edgar_pipeline(ticker, filing_types))
+        result = asyncio.run(run_edgar_pipeline(ticker, filing_types, force=force))
 
         redis = get_redis()
         from cache.filing_registry import get_filing_record

@@ -1,0 +1,191 @@
+{
+  "main": {
+    "id": "7cd69a6f6d344779",
+    "type": "split",
+    "children": [
+      {
+        "id": "f213303bc8c25f7d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c139f16362ea2fdf",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "finsight_ultimate_interview_prep.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "finsight_ultimate_interview_prep"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "b1678d6f2cdf1429",
+    "type": "split",
+    "children": [
+      {
+        "id": "7348ff4fe38cb793",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "92d38e168605132e",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "62bac6c995fbe3a6",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "dd39b86bbdbf759b",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "de73438eccf7d135",
+    "type": "split",
+    "children": [
+      {
+        "id": "8f5164439ea09382",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "e374ae7352efd44f",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "finsight_ultimate_interview_prep.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for finsight_ultimate_interview_prep"
+            }
+          },
+          {
+            "id": "559705ec058ed5d2",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "finsight_ultimate_interview_prep.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from finsight_ultimate_interview_prep"
+            }
+          },
+          {
+            "id": "5d8eafb148d0d7c3",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "32706a6a49233201",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "b7fd5e695de5c83e",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "finsight_ultimate_interview_prep.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of finsight_ultimate_interview_prep"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "c139f16362ea2fdf",
+  "lastOpenFiles": [
+    "finsight_interview_qa.md",
+    "finsight_ultimate_interview_prep.md"
+  ]
+}

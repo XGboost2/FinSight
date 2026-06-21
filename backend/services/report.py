@@ -9,6 +9,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from cache.event_store import list_events
 from cache.ticker_cache import get_ticker_info
 from ingestion.xbrl import get_xbrl_metrics
 from services.llm import call_llm_raw, _calc_cost
@@ -143,16 +144,13 @@ async def _generate_report(
     )[:20000]
 
     # 8-K events enrichment — material events since last 10-K
-    import json as _json
-    raw_events = redis_client.get(f"finsight:events:8-K:{ticker.upper()}")
     events_block = ""
-    if raw_events:
-        events = _json.loads(raw_events)[-10:]  # last 10 events
-        if events:
-            events_block = "\n\nRECENT MATERIAL EVENTS (8-K filings):\n" + "\n".join(
-                f"- {e['date']} [{e['event_type'].upper()}]: {e['summary'][:200]}"
-                for e in reversed(events)
-            )
+    events = list_events(redis_client, ticker)[:10]
+    if events:
+        events_block = "\n\nRECENT MATERIAL EVENTS (8-K filings):\n" + "\n".join(
+            f"- {e['date']} [{e['event_type'].upper()}]: {e['summary'][:200]}"
+            for e in events
+        )
 
     financial_block = ""
     if xbrl:

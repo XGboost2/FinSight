@@ -5,10 +5,10 @@ Each step is a direct function call.
 """
 
 import hashlib
-import json
 import logging
 
-from cache.filing_registry import is_ingested, register_filing
+from cache.event_store import store_event
+from cache.filing_registry import is_filing_ingested, register_filing
 from cache.redis_client import get_redis
 from ingestion.chunker import chunk_text
 from ingestion.edgar import (
@@ -17,7 +17,8 @@ from ingestion.edgar import (
     resolve_ticker_to_cik,
 )
 from rag.pipeline import ingest as rag_ingest
-from services.store import store_filing
+from rag.retriever import delete_filing_chunks
+from services.store import delete_filing, store_filing
 
 logger = logging.getLogger(__name__)
 
@@ -108,19 +109,29 @@ def _extract_readable_summary(text: str, event_type: str) -> str:
     return fallbacks.get(event_type, fallbacks["other"])
 
 
-def _store_8k_event(redis_client, ticker: str, date: str, event_type: str, text: str) -> None:
-    key = f"finsight:events:8-K:{ticker.upper()}"
-    existing = json.loads(redis_client.get(key) or "[]")
-    existing.append({
+def _store_8k_event(
+    redis_client,
+    ticker: str,
+    accession_number: str,
+    date: str,
+    event_type: str,
+    text: str,
+) -> None:
+    event = {
+        "accession_number": accession_number,
         "date": date,
         "event_type": event_type,
         "summary": _extract_readable_summary(text, event_type),
-    })
-    redis_client.setex(key, 60 * 60 * 24 * 30, json.dumps(existing))
+    }
+    store_event(redis_client, ticker, event)
 
 
-async def run_edgar_pipeline(ticker: str, filing_types: list[str]) -> dict:
-    """Fetch and ingest only the specified filing types. Skips already-cached types."""
+async def run_edgar_pipeline(
+    ticker: str,
+    filing_types: list[str],
+    force: bool = False,
+) -> dict:
+    """Fetch specified filing types and skip exact accessions already stored."""
     ticker = ticker.upper()
     redis = get_redis()
 
@@ -153,15 +164,24 @@ async def run_edgar_pipeline(ticker: str, filing_types: list[str]) -> dict:
             continue
 
         for meta in filings:
+            accession_number = meta["accession_number"]
             filing_id = hashlib.sha256(
-                f"{ticker}_{filing_type}_{meta['filing_date']}".encode()
+                f"{ticker}_{filing_type}_{accession_number}".encode()
             ).hexdigest()[:12]
 
-            # Skip if this specific filing already ingested (check by filing_id in Qdrant would
-            # be ideal, but registry keyed by ticker+type is sufficient as a gate)
-            if is_ingested(redis, ticker, filing_type) and filing_type != "8-K":
-                logger.info("Skipping %s %s — already in registry", ticker, filing_type)
-                break
+            if not force and is_filing_ingested(
+                redis,
+                ticker,
+                filing_type,
+                accession_number,
+            ):
+                logger.info(
+                    "Skipping %s %s accession %s — already ingested",
+                    ticker,
+                    filing_type,
+                    accession_number,
+                )
+                continue
 
             try:
                 text = await download_filing_text(meta["document_url"])
@@ -179,12 +199,23 @@ async def run_edgar_pipeline(ticker: str, filing_types: list[str]) -> dict:
                 "ticker": ticker,
                 "company_name": company["company_name"],
                 "filing_type": filing_type,
+                "accession_number": accession_number,
                 "filed_date": meta["filing_date"],
                 "text": text,
             }
             store_filing(filing_id, filing_data, chunks)
             rag_ingest(filing_id, chunks)
+
+            # One-time cleanup for IDs created by the previous date-based scheme.
+            legacy_filing_id = hashlib.sha256(
+                f"{ticker}_{filing_type}_{meta['filing_date']}".encode()
+            ).hexdigest()[:12]
+            if legacy_filing_id != filing_id:
+                delete_filing_chunks(legacy_filing_id)
+                delete_filing(legacy_filing_id)
+
             register_filing(redis, ticker, filing_id, {
+                "accession_number": accession_number,
                 "filed_date": meta["filing_date"],
                 "chunk_count": len(chunks),
             }, filing_type=filing_type)
@@ -198,7 +229,14 @@ async def run_edgar_pipeline(ticker: str, filing_types: list[str]) -> dict:
             elif filing_type == "8-K":
                 result["eight_k_ingested"] += 1
                 event_type = _classify_8k(meta.get("items", ""), text)
-                _store_8k_event(redis, ticker, meta["filing_date"], event_type, text)
+                _store_8k_event(
+                    redis,
+                    ticker,
+                    accession_number,
+                    meta["filing_date"],
+                    event_type,
+                    text,
+                )
                 logger.info("8-K classified: %s %s → %s", ticker, meta["filing_date"], event_type)
 
         logger.info("%s %s done: %d chunks", ticker, filing_type, result["total_chunks"])

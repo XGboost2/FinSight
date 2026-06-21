@@ -5,7 +5,6 @@ def test_hybrid_retrieve_keeps_existing_section_filter(monkeypatch):
     search_calls = []
     rerank_calls = []
 
-    monkeypatch.setattr(pipeline, "_retrieval_mode", lambda: "hybrid")
     monkeypatch.setattr(pipeline, "embed_query", lambda question: [0.1])
     monkeypatch.setattr(pipeline, "sparse_encode", lambda text: ([1], [1.0]))
 
@@ -37,7 +36,6 @@ def test_hybrid_retrieve_keeps_existing_section_filter(monkeypatch):
 def test_hybrid_revenue_retrieve_includes_financial_statements(monkeypatch):
     search_calls = []
 
-    monkeypatch.setattr(pipeline, "_retrieval_mode", lambda: "hybrid")
     monkeypatch.setattr(pipeline, "embed_query", lambda question: [0.1])
     monkeypatch.setattr(pipeline, "sparse_encode", lambda text: ([1], [1.0]))
 
