@@ -63,6 +63,8 @@ from models.schemas import (
     SectionDiff,
     SentimentResult,
     SourceChunk,
+    TradeRequest,
+    TradeResponse,
     YoYDiffResponse,
 )
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve, retrieve_multi as rag_retrieve_multi
@@ -115,6 +117,79 @@ _COMPARISON_TERMS = (
 def _is_comparison_question(question: str) -> bool:
     text = f" {question.lower()} "
     return any(term in text for term in _COMPARISON_TERMS)
+
+
+# Trade intent: a buy/sell/short command that names a quantity.
+_TRADE_INTENT_RE = re.compile(r"\b(buy|sell|short|purchase)\b.*?\b\d+(?:\.\d+)?\b", re.IGNORECASE)
+_AFFIRMATIONS = {
+    "yes", "y", "yeah", "yep", "confirm", "confirmed", "do it", "go ahead",
+    "proceed", "execute", "place it", "place the order", "ok", "okay", "sure",
+}
+_PENDING_TRADE_TTL = 300  # seconds the user has to confirm a proposed trade
+
+
+def _is_trade_intent(question: str) -> bool:
+    return bool(_TRADE_INTENT_RE.search(question or ""))
+
+
+def _is_affirmation(question: str) -> bool:
+    return (question or "").strip().lower().rstrip("!. ") in _AFFIRMATIONS
+
+
+def _trade_chat_response(answer: str) -> ChatResponse:
+    return ChatResponse(
+        answer=answer, sources=[], model_used="trading-agent",
+        tokens_in=0, tokens_out=0, cost_usd=0.0, latency_ms=0.0,
+    )
+
+
+async def _handle_trade_chat(question: str, sid: str | None, redis) -> ChatResponse | None:
+    """Route trade-like chat messages to the trading agent.
+
+    First a buy/sell message is proposed (not executed) and stashed in Redis;
+    a follow-up affirmation ('yes'/'confirm') executes it. Returns None when the
+    message is not trade-related, so normal RAG chat proceeds.
+    """
+    from agents.trading_agent import run_trade
+    from services.trading212 import Trading212Error
+
+    pending_key = f"finsight:pendingtrade:{sid}" if sid else None
+
+    pending = None
+    if pending_key:
+        try:
+            pending = redis.get(pending_key)
+            if isinstance(pending, bytes):
+                pending = pending.decode()
+        except Exception:
+            pending = None
+
+    # Affirmation that confirms a previously proposed trade → execute.
+    if pending and _is_affirmation(question):
+        try:
+            redis.delete(pending_key)
+        except Exception:
+            pass
+        try:
+            answer = await run_trade(pending, confirm=True)
+        except Trading212Error as exc:
+            answer = f"Trade failed: {exc}"
+        return _trade_chat_response(answer)
+
+    # New trade instruction → propose only (never auto-execute).
+    if _is_trade_intent(question):
+        try:
+            answer = await run_trade(question, confirm=False)
+        except Trading212Error as exc:
+            return _trade_chat_response(f"Trade unavailable: {exc}")
+        if pending_key:
+            try:
+                redis.setex(pending_key, _PENDING_TRADE_TTL, question)
+            except Exception:
+                pass
+        return _trade_chat_response(answer)
+
+    return None
 
 
 def _clean_metadata_value(value: str) -> str:
@@ -683,6 +758,26 @@ async def compare_companies(request: Request, body: CompareRequest) -> CompareRe
     return CompareResponse(**result, trends1=trends1, trends2=trends2)
 
 
+@router.post("/trade", response_model=TradeResponse)
+@limiter.limit("10/minute")
+async def execute_trade(request: Request, body: TradeRequest) -> TradeResponse:
+    """Natural-language trading via a tool-calling agent (Trading 212).
+
+    confirm=False (default) plans the order without executing; confirm=True
+    authorises real placement. Defaults to the demo/paper-trading account.
+    """
+    from agents.trading_agent import run_trade
+    from services.trading212 import Trading212Error
+
+    logger.info("Trade request: confirm=%s instruction=%r", body.confirm, body.instruction[:80])
+    try:
+        result = await run_trade(body.instruction, confirm=body.confirm)
+    except Trading212Error as exc:
+        raise HTTPException(502, f"Trading 212 error: {exc}") from exc
+
+    return TradeResponse(instruction=body.instruction, confirm=body.confirm, result=result)
+
+
 # ── Admin ────────────────────────────────────────────────────────────
 
 
@@ -820,6 +915,12 @@ async def chat(
 
     logger.info("Chat request: ticker=%s session=%s question=%r",
                 ticker, sid or "none", request_body.question[:80])
+
+    # Trade intent ('buy 10 msft' / 'yes') is handled by the trading agent,
+    # not the SEC-filing RAG path, and does not require an ingested filing.
+    trade_response = await _handle_trade_chat(request_body.question, sid, redis)
+    if trade_response is not None:
+        return trade_response
 
     explicit_filing_id = _validate_filing_id(request_body.filing_id) if request_body.filing_id else None
     is_comparison = _is_comparison_question(request_body.question)

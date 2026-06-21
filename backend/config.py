@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # --- News ---
     FINNHUB_API_KEY: str = ""
 
+    # --- Trading 212 (Invest/Stocks ISA only; beta API) ---
+    TRADING212_API_KEY_ID: str = ""
+    TRADING212_API_SECRET: str = ""
+    TRADING212_BASE_URL: str = "https://demo.trading212.com/api/v0"
+    # Safety pin: code refuses to place orders against the live host unless True.
+    TRADING212_ALLOW_LIVE: bool = False
+
     # --- Cache (Day 49+) ---
     REDIS_URL: str = "redis://localhost:6379"
 

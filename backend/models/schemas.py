@@ -141,6 +141,17 @@ class CompareRequest(BaseModel):
     tickers: list[str] = Field(..., min_length=2, max_length=2)
 
 
+class TradeRequest(BaseModel):
+    instruction: str = Field(..., min_length=1, max_length=500)
+    confirm: bool = False  # False = plan only; True = execute the order
+
+
+class TradeResponse(BaseModel):
+    instruction: str
+    confirm: bool
+    result: str
+
+
 class RevenueYear(BaseModel):
     year: str
     value: str

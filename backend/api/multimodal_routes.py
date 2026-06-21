@@ -23,8 +23,13 @@ AUDIO_TYPES = {
 }
 
 
+# Chat answers can be long; accept a generous bound to avoid 422s, but only
+# synthesise the first _TTS_MAX_CHARS — CPU TTS of more is slow and impractical.
+_TTS_MAX_CHARS = 2000
+
+
 class SpeechRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000)
+    text: str = Field(..., min_length=1, max_length=20000)
     voice: str | None = Field(default=None, max_length=50)
 
 
@@ -117,11 +122,13 @@ async def transcribe_question(
 @router.post("/speech")
 @limiter.limit("20/minute")
 async def synthesize_answer(request: Request, body: SpeechRequest):
+    payload = body.model_dump(exclude_none=True)
+    payload["text"] = payload["text"][:_TTS_MAX_CHARS]
     try:
         async with httpx.AsyncClient(timeout=get_settings().MULTIMODAL_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 _service_url("/speech"),
-                json=body.model_dump(exclude_none=True),
+                json=payload,
             )
     except httpx.RequestError as exc:
         logger.warning("Multimodal TTS service unavailable: %s", exc)
