@@ -80,6 +80,28 @@ describe('FilingPanel', () => {
     await waitFor(() => expect(axios.post).toHaveBeenCalled())
   })
 
+  it('extracts a handwritten question into the existing chat input', async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        text: 'What was Apple revenue in 2025?',
+        modality: 'handwriting',
+        requires_confirmation: true,
+      },
+    })
+    render(<FilingPanel ticker="AAPL" companyName="Apple Inc." filingId="aapl-123" filing={FILING} fetchingFiling={false} />)
+
+    const upload = screen.getByLabelText(/upload handwritten question/i)
+    await userEvent.upload(upload, new File(['image'], 'question.png', { type: 'image/png' }))
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/type, speak/i)).toHaveValue(
+      'What was Apple revenue in 2025?'
+    ))
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/api/multimodal/ocr'),
+      expect.any(FormData),
+    )
+  })
+
   it('clears history when filingId changes', async () => {
     axios.post.mockResolvedValue({ data: LLM_RESPONSE })
     const { rerender } = render(

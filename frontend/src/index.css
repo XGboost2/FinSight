@@ -1802,6 +1802,20 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.speak-message {
+  margin-top: 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.67rem;
+  cursor: pointer;
+}
+.speak-message:hover { color: var(--accent); border-color: var(--accent-border); }
 
 .model-selector {
   grid-row: 4;
@@ -1839,19 +1853,54 @@ body {
   align-items: center;
 }
 
-.chat-input {
-  flex: 1;
+.chat-composer {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.5rem 0.7rem;
+  transition: border-color 0.18s, background 0.18s;
+}
+.chat-composer:focus-within {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.05);
+}
+.chat-tool {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chat-tool:hover:not(:disabled) { color: var(--accent); }
+.chat-tool:disabled { opacity: 0.35; cursor: not-allowed; }
+.chat-tool input { display: none; }
+.chat-tool-recording {
+  color: var(--red);
+  animation: recordingPulse 1.2s ease-in-out infinite;
+}
+@keyframes recordingPulse {
+  50% { opacity: 0.45; }
+}
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: 0.5rem 0.65rem 0.5rem 0.2rem;
   font-size: 0.78rem;
   color: var(--text);
   outline: none;
   transition: border-color 0.18s;
   min-width: 0;
 }
-.chat-input:focus { border-color: var(--accent); background: rgba(99, 102, 241, 0.05); }
+.chat-input:focus { border-color: transparent; background: transparent; }
 .chat-input::placeholder { color: var(--muted); }
 .chat-input:disabled { opacity: 0.45; }
 
@@ -1870,6 +1919,33 @@ body {
 }
 .chat-submit:hover:not(:disabled) { opacity: 0.82; }
 .chat-submit:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.multimodal-options {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  min-height: 1rem;
+}
+.voice-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.67rem;
+  cursor: pointer;
+}
+.voice-toggle input { accent-color: var(--accent); }
+.media-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--muted);
+  font-size: 0.67rem;
+}
+.recording-state { color: var(--red); }
+.media-error { color: var(--red); }
 
 /* === Utilities === */
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -35,6 +35,7 @@ Upload a custom document → FinSight converts it with Microsoft MarkItDown, cle
 | **Cross-Encoder Reranker** | `BAAI/bge-reranker-base` (280MB ONNX, CPU) rescores top-20 RRF candidates for true relevance. Catches cases where similarity ≠ relevance — e.g. "supply chain risks" → "Geographic Concentration Risk" section |
 | **Cross-Filing Retrieval** | RAG search across 10-K + 10-Q simultaneously via Qdrant `MatchAny` filter. Enables quarterly trend questions over annual filings |
 | **Multi-Query Retrieval** | Chat endpoint issues both the original question and section-targeted rephrasing to improve recall on topic-specific queries |
+| **Local Multimodal Chat** | Handwritten questions use TrOCR, voice questions use Faster Whisper Tiny INT8, and answers use Kokoro TTS. All models run locally and normalize into the existing grounded chat pipeline |
 | **SEC Filing RAG** | SEC 10-K/10-Q/8-K retrieval uses XBRL where exact financial facts matter, content-aware SEC chunking, Qdrant dense+sparse hybrid search, section filters, and cross-encoder reranking |
 | **Neo4j Graph RAG** | Uploaded documents are stored locally in Neo4j as `Document → Section → Chunk` with PageIndex metadata and retrieved through lexical + section-aware vectorless scoring. Useful for explainable graph-backed RAG demos |
 
@@ -147,9 +148,12 @@ FastAPI :8000  ──  slowapi (Redis rate limiter)  ──  APScheduler (02:00 
       │
       └── limiter.py                 ← slowapi limiter (Redis-backed, shared across workers)
       │
-      ▼              ▼              ▼             ▼
+      ▼              ▼              ▼             ▼              ▼
   Qdrant :6333   Neo4j :7687    Redis DB0      Redis DB1     Flower :5555
   (vectors)      (graph RAG)    (app data)     (Celery)      (task monitor)
+
+      ▼
+  multimodal :8010 — TrOCR OCR · Faster Whisper STT · Kokoro TTS (all local, CPU)
 ```
 
 ### RAG Retrieval Pipeline
@@ -260,8 +264,11 @@ The chat endpoint can mix both sources in one answer. For example, if Apple SEC 
 | Background Tasks | Celery 5 + Flower (monitoring at :5555) |
 | Scheduler | APScheduler 3.10 (daily 02:00 UTC ticker refresh) |
 | JSON Reliability | json-repair + 3-attempt retry for malformed LLM output |
+| OCR | `microsoft/trocr-base-handwritten` via HuggingFace transformers (CPU, OpenCV preprocessing) |
+| Speech-to-text | Faster Whisper `tiny.en` (CPU INT8, voice activity detection, CTranslate2) |
+| Text-to-speech | Kokoro 82M (Apache 2.0, local CPU, WAV output) |
 | Frontend | React 19 + Vite, TradingView Widgets, Lucide icons |
-| Containers | Docker + Docker Compose (backend, frontend, worker, Redis, Qdrant, Neo4j, Flower) |
+| Containers | Docker + Docker Compose (backend, frontend, worker, multimodal, Redis, Qdrant, Neo4j, Flower) |
 
 ---
 
@@ -280,6 +287,10 @@ The chat endpoint can mix both sources in one answer. For example, if Apple SEC 
 | `GET` | `/api/companies/{ticker}/news` | 20/min | Finnhub headlines + FinBERT sentiment |
 | `GET` | `/api/companies/{ticker}/events` | — | Recent 8-K events classified by type |
 | `POST` | `/api/documents/ingest` | 3/min | Upload a custom document. MarkItDown conversion → chunking → Neo4j graph RAG registration |
+| `POST` | `/api/multimodal/ocr` | 10/min | Handwriting OCR — upload image, returns extracted text |
+| `POST` | `/api/multimodal/transcribe` | 10/min | Speech-to-text — upload audio, returns transcript |
+| `POST` | `/api/multimodal/speech` | 20/min | Text-to-speech — returns WAV audio |
+| `GET` | `/api/multimodal/health` | — | Multimodal service health + loaded model status |
 | `POST` | `/api/companies/compare` | 10/min | Two-ticker head-to-head with YoY revenue trend |
 | `POST` | `/api/chat` | — | RAG Q&A with optional model override and optional `filing_id` for uploaded documents |
 | `GET` | `/api/companies/search?q=apple` | 60/min | Company autocomplete from Redis |
@@ -426,9 +437,17 @@ finsight-ai/
 │   ├── cache/
 │   │   ├── redis_client.py
 │   │   ├── ticker_cache.py            ← 13k companies, 2am refresh
-│   │   ├── filing_registry.py         ← filing-type registry
+│   │   ├── filing_registry.py         ← per-accession filing history + latest-record index
+│   │   ├── event_store.py             ← accession-keyed 8-K event hash (idempotent upsert)
 │   │   └── cost_tracker.py            ← per-call cost recording + aggregation
 │   └── jobs/refresh_tickers.py
+├── multimodal-service/
+│   ├── main.py                        ← FastAPI service — OCR / STT / TTS endpoints
+│   ├── ocr.py                         ← TrOCR handwriting OCR with OpenCV preprocessing
+│   ├── speech.py                      ← Faster Whisper STT + Kokoro TTS
+│   ├── models.py                      ← lazy model loaders (singleton per process)
+│   ├── preload_models.py              ← one-shot model download script
+│   └── requirements.txt
 ├── frontend/
 │   └── src/
 │       ├── App.jsx                    ← routing, ingest polling, localStorage persistence
@@ -455,8 +474,15 @@ finsight-ai/
     ├── test_routes.py
     ├── test_graph_store.py            ← Neo4j graph RAG unit tests with fake driver/session
     ├── test_rag_pipeline.py           ← Qdrant hybrid retrieval and section-filter tests
+    ├── test_retriever.py              ← HNSW config propagation, payload indexes, stale cleanup
+    ├── test_ingestion_dedup.py        ← accession dedup, 8-K idempotency, force-reingest
+    ├── test_document_converter.py     ← MarkItDown conversion + cleaner
+    ├── test_pageindex.py              ← PageIndex section extraction
+    ├── test_multimodal_routes.py      ← OCR / STT / TTS proxy endpoint tests
     └── eval_baseline/
         ├── run_eval.py                ← DeepEval runner — 6 metrics, custom DeepSeekJudge, caching
+        ├── run_hnsw_eval.py           ← HNSW recall/latency benchmark against live Qdrant
+        ├── run_agent_eval.py          ← LangGraph pipeline quality eval (4 GEval metrics)
         ├── questions.json             ← 20 hand-curated Q&A pairs with ground truth across 5 tickers
         ├── baseline_scores.json       ← locked baseline scores (updated each --set-baseline run)
         └── results/                   ← timestamped per-run score history
@@ -511,6 +537,8 @@ finsight-ai/
 - [x] **MarkItDown document uploads** — upload endpoint converts many business file formats into Markdown-like text before chunking
 - [x] **PageIndex upload structure** — converted uploads get PageIndex-style section metadata before Neo4j insertion
 - [x] **Neo4j graph RAG for uploads** — local graph database stores uploaded documents as `Document → Section → Chunk`; chat can target a specific uploaded `filing_id`
+- [x] **Local multimodal chat** — handwriting OCR (TrOCR), speech-to-text (Faster Whisper Tiny INT8), text-to-speech (Kokoro 82M) — all local CPU, isolated Docker service, normalized into existing `/api/chat` path
+- [x] **Idempotent ingestion** — accession-keyed filing history, deterministic chunk IDs, stale Qdrant point cleanup, atomic 8-K event upsert, content-hash upload dedup
 
 ### Planned
 - [ ] **EDGAR MCP server** — FastMCP exposing fetch_10k, search_filings, get_xbrl as tools. Compatible with Claude Code and any MCP client
@@ -551,9 +579,28 @@ finsight-ai/
 
 **How is ingestion made idempotent?** SEC accession numbers are the source-of-truth filing identity; ticker, form, and filing date are not unique enough. Redis keeps a per-accession filing history plus a separate latest-record index for fast dashboard lookups. Qdrant point IDs are deterministic UUIDs derived from `filing_id + chunk_index`, so retries overwrite matching chunks, and each replacement deletes stale higher-index points if chunking produces fewer chunks. 8-K events use an accession-keyed Redis hash, making concurrent insert-or-replace operations atomic instead of using a racing JSON read-modify-write list. Uploaded files use a full-file SHA-256 content hash, while `force=true` deliberately bypasses the registry but still writes to the same deterministic identities. This provides at-least-once task execution with effectively-once stored results.
 
+**Why modality normalization instead of a separate multimodal agent?** Handwriting OCR and speech recognition produce an editable text question that enters the existing `/api/chat` path; text-to-speech consumes the grounded answer afterward. This preserves Qdrant/Neo4j retrieval, citations, sessions, caching, model routing, and Langfuse traces across every modality. The models are isolated in a local inference container so PyTorch, OpenCV, CTranslate2, and audio dependencies cannot destabilize the core API. The stack is TrOCR Base Handwritten, Faster Whisper Tiny English with CPU INT8, and Kokoro 82M, so the multimodal layer has no per-request inference cost.
+
 ---
 
 ## Changelog
+
+### Day 62 — 2026-06-21
+
+**Local multimodal chat**
+- Added an isolated `multimodal` Docker service with lazy-loaded local models and a persistent Hugging Face cache
+- Added handwriting OCR using `microsoft/trocr-base-handwritten` with color-aware ink isolation, OpenCV line segmentation, and image preprocessing
+- Added local speech-to-text using Faster Whisper `tiny.en` with CPU INT8 and voice activity detection
+- Added local text-to-speech using Apache-licensed Kokoro 82M
+- Added `/api/multimodal/ocr`, `/transcribe`, `/speech`, and `/health` proxy endpoints with validation, rate limits, timeouts, and no media persistence
+- Added handwritten-image upload, browser microphone recording, editable transcripts, optional automatic voice answers, and per-message playback controls
+- Kept `/api/chat`, financial RAG, sessions, citations, caching, and LLM routing unchanged through modality normalization
+
+Preload the local models before a demo with:
+
+```bash
+docker compose run --rm multimodal python preload_models.py
+```
 
 ### Day 61 — 2026-06-18
 

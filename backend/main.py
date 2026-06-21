@@ -18,6 +18,7 @@ from config import get_settings
 from jobs.refresh_tickers import refresh_ticker_index
 from rag.retriever import ensure_collection
 from api.routes import router as api_router
+from api.multimodal_routes import router as multimodal_router
 from logging_config import setup_logging
 from services.observability import init_langfuse, flush as langfuse_flush
 
@@ -121,6 +122,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router)
+app.include_router(multimodal_router)
 
 
 @app.get("/")

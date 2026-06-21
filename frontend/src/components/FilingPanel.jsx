@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
-import { FileText, MessageCircle, Loader, ChevronRight, Upload, CheckCircle, AlertCircle } from 'lucide-react'
+import {
+  FileText, MessageCircle, Loader, ChevronRight, Upload, CheckCircle,
+  AlertCircle, ImagePlus, Mic, Square, Volume2, VolumeX,
+} from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 
@@ -34,7 +37,16 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const [uploadedFiling, setUploadedFiling] = useState(null)
+  const [mediaBusy, setMediaBusy] = useState('')
+  const [mediaError, setMediaError] = useState('')
+  const [recording, setRecording] = useState(false)
+  const [voiceResponses, setVoiceResponses] = useState(false)
+  const [speakingIndex, setSpeakingIndex] = useState(null)
   const bottomRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const audioRef = useRef(null)
+  const audioUrlRef = useRef(null)
 
   const activeFiling = uploadedFiling ?? filing
   const activeFilingId = uploadedFiling?.filing_id ?? filingId
@@ -46,6 +58,9 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
   useEffect(() => {
     setHistory([])
     setQuestion('')
+    audioRef.current?.pause()
+    if (audioRef.current) audioRef.current.currentTime = 0
+    setSpeakingIndex(null)
   }, [activeFilingId])
 
   useEffect(() => {
@@ -54,6 +69,46 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     setUploadError('')
     setUploadType('10-K')
   }, [ticker])
+
+  useEffect(() => () => {
+    audioRef.current?.pause()
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    mediaRecorderRef.current?.stream?.getTracks().forEach(track => track.stop())
+  }, [])
+
+  const speakAnswer = async (text, index) => {
+    if (!text || speakingIndex !== null) return
+    setMediaError('')
+    setSpeakingIndex(index)
+    try {
+      audioRef.current?.pause()
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+      const { data } = await axios.post(
+        `${API_URL}/api/multimodal/speech`,
+        { text },
+        { responseType: 'blob' },
+      )
+      const url = URL.createObjectURL(data)
+      audioUrlRef.current = url
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.onended = () => setSpeakingIndex(null)
+      audio.onerror = () => {
+        setSpeakingIndex(null)
+        setMediaError('Audio playback failed.')
+      }
+      await audio.play()
+    } catch (e) {
+      setSpeakingIndex(null)
+      setMediaError(e.response?.data?.detail || 'Local speech synthesis failed.')
+    }
+  }
+
+  const stopSpeaking = () => {
+    audioRef.current?.pause()
+    if (audioRef.current) audioRef.current.currentTime = 0
+    setSpeakingIndex(null)
+  }
 
   const send = async (q) => {
     const text = q.trim()
@@ -73,11 +128,14 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
       }, { headers })
       const cacheBadge = data.from_cache ? ' · cached' : ''
       const historyBadge = data.history_len > 0 ? ` · ${data.history_len} turns` : ''
+      const answerId = `answer-${Date.now()}-${Math.random()}`
       setHistory(h => [...h, {
+        id: answerId,
         role: 'assistant',
         text: data.answer,
         meta: `${data.model_used} · $${data.cost_usd.toFixed(4)} · ${Math.round(data.latency_ms)}ms${cacheBadge}${historyBadge}`,
       }])
+      if (voiceResponses) void speakAnswer(data.answer, answerId)
     } catch (e) {
       setHistory(h => [...h, {
         role: 'error',
@@ -123,6 +181,73 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
       setUploadError(e.response?.data?.detail || 'Upload failed — check backend logs.')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleQuestionImage = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || mediaBusy) return
+    const form = new FormData()
+    form.append('file', file)
+    setMediaBusy('Reading handwriting…')
+    setMediaError('')
+    try {
+      const { data } = await axios.post(`${API_URL}/api/multimodal/ocr`, form)
+      setQuestion(data.text)
+    } catch (error) {
+      setMediaError(error.response?.data?.detail || 'Handwriting recognition failed.')
+    } finally {
+      setMediaBusy('')
+    }
+  }
+
+  const transcribeRecording = async (blob) => {
+    const form = new FormData()
+    form.append('file', blob, 'question.webm')
+    setMediaBusy('Transcribing speech…')
+    setMediaError('')
+    try {
+      const { data } = await axios.post(`${API_URL}/api/multimodal/transcribe`, form)
+      setQuestion(data.text)
+    } catch (error) {
+      setMediaError(error.response?.data?.detail || 'Speech transcription failed.')
+    } finally {
+      setMediaBusy('')
+    }
+  }
+
+  const toggleRecording = async () => {
+    if (recording) {
+      mediaRecorderRef.current?.stop()
+      setRecording(false)
+      return
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setMediaError('Audio recording is not supported by this browser.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const options = MediaRecorder.isTypeSupported?.('audio/webm')
+        ? { mimeType: 'audio/webm' }
+        : undefined
+      const recorder = new MediaRecorder(stream, options)
+      audioChunksRef.current = []
+      recorder.ondataavailable = event => {
+        if (event.data.size) audioChunksRef.current.push(event.data)
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop())
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        if (blob.size) void transcribeRecording(blob)
+      }
+      recorder.start()
+      mediaRecorderRef.current = recorder
+      setMediaError('')
+      setRecording(true)
+    } catch {
+      setMediaError('Microphone permission was denied.')
     }
   }
 
@@ -238,6 +363,18 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
                 <div key={i} className={`msg ${msg.role}`}>
                   <p className="msg-text">{msg.text}</p>
                   {msg.meta && <span className="msg-meta">{msg.meta}</span>}
+                  {msg.role === 'assistant' && (
+                    <button
+                      type="button"
+                      className="speak-message"
+                      onClick={() => speakingIndex === msg.id ? stopSpeaking() : speakAnswer(msg.text, msg.id)}
+                      aria-label={speakingIndex === msg.id ? 'Stop speaking' : 'Read answer aloud'}
+                    >
+                      {speakingIndex === msg.id
+                        ? <><VolumeX size={12} /> Stop</>
+                        : <><Volume2 size={12} /> Listen</>}
+                    </button>
+                  )}
                 </div>
               ))}
               {chatLoading && (
@@ -264,21 +401,57 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
             </div>
 
             <form onSubmit={handleSubmit} className="chat-form">
-              <input
-                type="text"
-                value={question}
-                onChange={e => setQuestion(e.target.value)}
-                placeholder="Ask about 10-K, 10-Q, or 8-K filings…"
-                disabled={chatLoading}
-                className="chat-input"
-              />
+              <div className="chat-composer">
+                <label className="chat-tool" title="Upload a handwritten question">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleQuestionImage}
+                    disabled={chatLoading || Boolean(mediaBusy)}
+                    aria-label="Upload handwritten question"
+                  />
+                  <ImagePlus size={16} />
+                </label>
+                <button
+                  type="button"
+                  className={`chat-tool${recording ? ' chat-tool-recording' : ''}`}
+                  onClick={toggleRecording}
+                  disabled={chatLoading || Boolean(mediaBusy)}
+                  aria-label={recording ? 'Stop recording' : 'Record voice question'}
+                  title={recording ? 'Stop recording' : 'Record voice question'}
+                >
+                  {recording ? <Square size={14} /> : <Mic size={16} />}
+                </button>
+                <input
+                  type="text"
+                  value={question}
+                  onChange={e => setQuestion(e.target.value)}
+                  placeholder="Ask about filings — type, speak, or upload handwriting…"
+                  disabled={chatLoading || Boolean(mediaBusy)}
+                  className="chat-input"
+                />
+              </div>
               <button
                 type="submit"
-                disabled={!question.trim() || chatLoading}
+                disabled={!question.trim() || chatLoading || Boolean(mediaBusy)}
                 className="chat-submit"
               >
                 Ask
               </button>
+              <div className="multimodal-options">
+                <label className="voice-toggle">
+                  <input
+                    type="checkbox"
+                    checked={voiceResponses}
+                    onChange={e => setVoiceResponses(e.target.checked)}
+                  />
+                  <Volume2 size={12} />
+                  Speak answers
+                </label>
+                {recording && <span className="media-state recording-state">Recording… click stop when finished</span>}
+                {mediaBusy && <span className="media-state"><Loader size={11} className="spin" /> {mediaBusy}</span>}
+                {mediaError && <span className="media-state media-error">{mediaError}</span>}
+              </div>
             </form>
           </div>
         </>

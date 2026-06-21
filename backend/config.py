@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # --- Document Uploads ---
     DOCUMENT_UPLOAD_MAX_BYTES: int = 25 * 1024 * 1024
 
+    # --- Local Multimodal Service ---
+    MULTIMODAL_SERVICE_URL: str = "http://localhost:8010"
+    MULTIMODAL_TIMEOUT_SECONDS: float = 120.0
+    MULTIMODAL_IMAGE_MAX_BYTES: int = 10 * 1024 * 1024
+    MULTIMODAL_AUDIO_MAX_BYTES: int = 25 * 1024 * 1024
+
     # --- Observability (Day 49+) ---
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_PUBLIC_KEY: str = ""

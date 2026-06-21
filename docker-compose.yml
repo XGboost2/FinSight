@@ -20,12 +20,14 @@ services:
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
       - HF_HOME=/root/.cache/huggingface
       - FASTEMBED_CACHE_PATH=/root/.cache/fastembed
+      - MULTIMODAL_SERVICE_URL=http://multimodal:8010
     env_file:
       - .env
     depends_on:
       - qdrant
       - redis
       - neo4j
+      - multimodal
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -79,6 +81,31 @@ services:
       - 8.8.4.4
     restart: unless-stopped
 
+  multimodal:
+    build:
+      context: ./multimodal-service
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - ./multimodal-service:/app
+      - multimodal_hf_cache:/root/.cache/huggingface
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_HOME=/root/.cache/huggingface
+      - OCR_MODEL=microsoft/trocr-base-handwritten
+      - STT_MODEL=tiny.en
+      - STT_DEVICE=cpu
+      - STT_COMPUTE_TYPE=int8
+      - TTS_LANGUAGE=a
+      - TTS_VOICE=af_heart
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -131,3 +158,4 @@ volumes:
   neo4j_logs:
   fastembed_cache:
   hf_cache:
+  multimodal_hf_cache:

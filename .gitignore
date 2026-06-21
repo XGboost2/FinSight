@@ -45,6 +45,13 @@ MANIFEST
 # Graphify Output
 graphify-out/
 
+# Accidentally committed venv
+finsight_backup/
+
+# Obsidian vaults (personal editor state)
+obsidian/
+obsidian_QA/
+
 # DeepEval
 .deepeval/.deepeval-cache.json
 .deepeval/.deepeval_telemetry.txt
