@@ -1817,35 +1817,74 @@ body {
 }
 .speak-message:hover { color: var(--accent); border-color: var(--accent-border); }
 
-.model-selector {
+.llm-bar {
   grid-row: 4;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem;
-  padding: 0.4rem 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.3rem 0 0.05rem;
   min-width: 0;
 }
-.model-pill {
-  padding: 0.2rem 0.55rem;
-  font-size: 0.65rem;
-  font-weight: 600;
-  border-radius: 20px;
+
+.llm-mode-switch {
+  display: inline-flex;
+  padding: 0.18rem;
   border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.llm-mode-pill {
+  padding: 0.22rem 0.62rem;
+  border: 0;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 700;
   cursor: pointer;
-  transition: all 0.15s;
   white-space: nowrap;
 }
-.model-pill:hover { border-color: var(--accent); color: var(--text); }
-.model-pill-active {
+.llm-mode-pill-active {
   background: var(--accent-dim);
-  border-color: var(--accent);
   color: var(--accent);
 }
 
-.chat-form {
+.llm-model-field {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.llm-model-select {
+  min-width: 210px;
+  max-width: 360px;
+  padding: 0.36rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.llm-hint {
   grid-row: 5;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.35;
+  padding-bottom: 0.05rem;
+}
+
+.chat-form {
+  grid-row: 6;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.45rem;

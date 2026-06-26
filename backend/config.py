@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     KIMI_API_KEY: str = ""
     KIMI_BASE_URL: str = "https://api.moonshot.ai/v1"
+    LOCAL_LLM_BASE_URL: str = "http://host.docker.internal:11434/v1"
+    LOCAL_LLM_MODEL: str = "qwen3.5:0.8b"
+    LOCAL_LLM_API_KEY: str = "local"
 
     # --- SEC EDGAR ---
     # Format: "AppName your@email.com" — required by SEC fair access policy
@@ -53,6 +56,11 @@ class Settings(BaseSettings):
     # --- Retrieval ---
     # SEC filings use Qdrant dense+sparse hybrid retrieval with section filters.
     # Uploaded documents use MarkItDown -> PageIndex-style structure -> Neo4j.
+    HYPER_EXTRACT_ENABLED: bool = True
+    HYPER_EXTRACT_TEMPLATE: str = "finance/ownership_graph"
+    HYPER_EXTRACT_TEMPLATES: str = "finance/ownership_graph,finance/event_timeline,finance/risk_factor_set,general/concept_graph"
+    HYPER_EXTRACT_LANGUAGE: str = "en"
+    HYPER_EXTRACT_MAX_CHUNKS: int = 8
 
     # --- Document Uploads ---
     DOCUMENT_UPLOAD_MAX_BYTES: int = 25 * 1024 * 1024
@@ -67,7 +75,7 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
-    
+
     # --- News ---
     FINNHUB_API_KEY: str = ""
 

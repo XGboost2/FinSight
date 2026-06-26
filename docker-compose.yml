@@ -28,6 +28,8 @@ services:
       - redis
       - neo4j
       - multimodal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -47,6 +49,13 @@ services:
       # API calls proxied via Vite server to http://backend:8000 — no VITE_API_URL needed
     depends_on:
       - backend
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://frontend:3000
+    depends_on:
+      - frontend
     restart: unless-stopped
 
   celery-worker:
@@ -76,6 +85,8 @@ services:
       - redis
       - qdrant
       - neo4j
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     dns:
       - 8.8.8.8
       - 8.8.4.4

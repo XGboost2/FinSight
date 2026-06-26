@@ -164,6 +164,8 @@ class TestDocumentIngest:
              patch("api.routes.chunk_text", return_value=chunks), \
              patch("api.routes.store_filing") as mock_store, \
              patch("api.routes.ingest_graph_document") as mock_graph_ingest, \
+             patch("api.routes.extract_upload_knowledge", return_value=None), \
+             patch("api.routes.ingest_extracted_knowledge") as mock_knowledge_ingest, \
              patch("api.routes.register_filing") as mock_register:
             r = client.post(
                 "/api/documents/ingest",
@@ -182,6 +184,7 @@ class TestDocumentIngest:
         assert body["retrieval"] == "neo4j_vectorless_graph"
         mock_store.assert_called_once()
         mock_graph_ingest.assert_called_once()
+        mock_knowledge_ingest.assert_called_once()
         assert mock_graph_ingest.call_args.args[2]["ticker"] == "SNDK"
         assert mock_graph_ingest.call_args.args[2]["company_name"] == "SanDisk Corporation"
         assert mock_graph_ingest.call_args.args[2]["selected_ticker"] == "AAPL"
@@ -214,6 +217,8 @@ class TestDocumentIngest:
              patch("api.routes.enrich_chunks_with_pageindex", side_effect=lambda _text, value: value), \
              patch("api.routes.store_filing") as store, \
              patch("api.routes.ingest_graph_document"), \
+             patch("api.routes.extract_upload_knowledge", return_value=None), \
+             patch("api.routes.ingest_extracted_knowledge"), \
              patch("api.routes.register_filing"):
             first = client.post(
                 "/api/documents/ingest",

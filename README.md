@@ -310,6 +310,17 @@ cp .env.example .env   # add your API keys
 docker compose up --build
 ```
 
+To expose the app over Cloudflare Tunnel, start the same stack and watch the tunnel logs:
+
+```bash
+docker compose up -d --build
+docker compose logs -f cloudflared
+```
+
+The tunnel targets the frontend container. That keeps the public surface area limited to the UI while `/api` requests continue to proxy to the internal backend and multimodal service over the Docker network.
+
+For the local chat mode, point `LOCAL_LLM_BASE_URL` at an OpenAI-compatible local server such as Ollama or LM Studio. The frontend lets you choose the local model, and the default recommendation is `qwen3.5:0.8b` because it is a strong fit for laptop-class hardware and keeps local chat lightweight.
+
 | Service | URL |
 |---------|-----|
 | Frontend | http://localhost:3000 |

@@ -16,6 +16,7 @@ markitdown[all]>=0.1.0
 qdrant-client>=1.9.0
 fastembed>=0.3.6
 neo4j>=5.25.0
+hyperextract>=0.3.0
 
 # Cache + Scheduler
 redis>=5.0.0

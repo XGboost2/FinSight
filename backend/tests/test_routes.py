@@ -107,6 +107,40 @@ class TestReport:
         assert resp.status_code == 502
 
 
+# ── Chat ─────────────────────────────────────────────────────────────
+
+class TestChat:
+    def test_local_mode_passes_through_to_llm(self, client, mock_redis):
+        mock_llm = AsyncMock(return_value={
+            "answer": "Local answer",
+            "model_used": "qwen3.5:0.8b",
+            "llm_mode": "local",
+            "tokens_in": 12,
+            "tokens_out": 34,
+            "cost_usd": 0.0,
+            "latency_ms": 42.0,
+        })
+        with patch("api.routes.get_redis", return_value=mock_redis), \
+             patch("api.routes.graph_exists", return_value=False), \
+             patch("api.routes.list_events", return_value=[]), \
+             patch("api.routes.rag_retrieve", return_value=[{"chunk_index": 0, "text": "ctx"}]), \
+             patch("api.routes.ask_llm", mock_llm):
+            resp = client.post("/api/chat", json={
+                "question": "What are the risks?",
+                "ticker": "AAPL",
+                "filing_id": "abc123def456",
+                "llm_mode": "local",
+                "model": "qwen3.5:0.8b",
+            })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["llm_mode"] == "local"
+        assert body["model_used"] == "qwen3.5:0.8b"
+        _, kwargs = mock_llm.call_args
+        assert kwargs["llm_mode"] == "local"
+        assert kwargs["model"] == "qwen3.5:0.8b"
+
+
 # ── Sentiment ─────────────────────────────────────────────────────────
 
 class TestSentiment:

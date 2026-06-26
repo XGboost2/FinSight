@@ -60,6 +60,28 @@ describe('FilingPanel', () => {
     )
   })
 
+  it('sends local mode and selected local model to the chat endpoint', async () => {
+    axios.post.mockResolvedValue({ data: { ...LLM_RESPONSE, llm_mode: 'local', model_used: 'qwen3.5:0.8b' } })
+    render(<FilingPanel ticker="AAPL" companyName="Apple Inc." filingId="aapl-123" filing={FILING} fetchingFiling={false} />)
+
+    fireEvent.click(screen.getByRole('tab', { name: /local/i }))
+    fireEvent.change(screen.getByLabelText(/local model/i), { target: { value: 'qwen3.5:0.8b' } })
+    await userEvent.type(screen.getByPlaceholderText(/ask about/i), 'What are the risks?')
+    fireEvent.click(screen.getByRole('button', { name: /ask/i }))
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/api/chat'),
+      expect.objectContaining({
+        question: 'What are the risks?',
+        ticker: 'AAPL',
+        filing_id: 'aapl-123',
+        llm_mode: 'local',
+        model: 'qwen3.5:0.8b',
+      }),
+      expect.any(Object)
+    ))
+  })
+
   it('shows error message on failed chat request', async () => {
     axios.post.mockRejectedValue({ response: { data: { detail: 'LLM unavailable' } } })
     render(<FilingPanel ticker="AAPL" companyName="Apple Inc." filingId="aapl-123" filing={FILING} fetchingFiling={false} />)

@@ -5,6 +5,7 @@ All structured data flows through these models. Never use raw dicts.
 
 import re
 from datetime import datetime, timezone
+from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -52,6 +53,7 @@ class ChatRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=10)
     filing_id: str | None = None  # optional explicit filing/upload to chat against
     model: str | None = None     # None = auto-route
+    llm_mode: Literal["cloud", "local"] = "cloud"
     include_context: bool = False  # set True to get full chunk text (eval only)
     session_id: str | None = None  # omit for sessionless (eval / direct API)
 
@@ -65,6 +67,7 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
     model_used: str
+    llm_mode: Literal["cloud", "local", "system"] = "cloud"
     tokens_in: int
     tokens_out: int
     cost_usd: float

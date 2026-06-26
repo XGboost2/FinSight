@@ -3,6 +3,7 @@
 All endpoints return Pydantic models. Never raw dicts.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -68,7 +69,8 @@ from models.schemas import (
     YoYDiffResponse,
 )
 from rag.pipeline import ingest as rag_ingest, retrieve as rag_retrieve, retrieve_multi as rag_retrieve_multi
-from rag.graph_store import graph_exists, ingest_graph_document, retrieve_graph
+from rag.graph_store import graph_exists, ingest_extracted_knowledge, ingest_graph_document, retrieve_graph
+from rag.hyper_extract import extract_upload_knowledge
 from services.comparison import get_or_generate_comparison
 from services.dashboard import get_or_extract_dashboard
 from services.diff import get_or_compute_diff
@@ -138,7 +140,7 @@ def _is_affirmation(question: str) -> bool:
 
 def _trade_chat_response(answer: str) -> ChatResponse:
     return ChatResponse(
-        answer=answer, sources=[], model_used="trading-agent",
+        answer=answer, sources=[], model_used="trading-agent", llm_mode="system",
         tokens_in=0, tokens_out=0, cost_usd=0.0, latency_ms=0.0,
     )
 
@@ -470,6 +472,11 @@ async def ingest_document(
     redis = get_redis()
     store_filing(filing_id, metadata, chunks)
     ingest_graph_document(redis, filing_id, metadata, chunks)
+    try:
+        knowledge = await asyncio.to_thread(extract_upload_knowledge, converted.text, chunks)
+        ingest_extracted_knowledge(redis, filing_id, knowledge)
+    except Exception as exc:
+        logger.warning("Hyper-Extract upload enrichment skipped: filing_id=%s error=%s", filing_id, exc)
     register_filing(redis, ticker, filing_id, {
         "filed_date": filed_date,
         "chunk_count": len(chunks),
@@ -915,6 +922,7 @@ async def chat(
 
     logger.info("Chat request: ticker=%s session=%s question=%r",
                 ticker, sid or "none", request_body.question[:80])
+    llm_mode = request_body.llm_mode if request_body.llm_mode in {"cloud", "local"} else "cloud"
 
     # Trade intent ('buy 10 msft' / 'yes') is handled by the trading agent,
     # not the SEC-filing RAG path, and does not require an ingested filing.
@@ -931,7 +939,8 @@ async def chat(
             raise HTTPException(404, f"No filing for '{ticker}'. Ingest first.")
         record = get_filing_record(redis, ticker)
         filing_id = record["filing_id"]
-    cache_scope = f"{ticker}:{filing_id}" if explicit_filing_id else ticker
+    cache_model = request_body.model or "auto"
+    cache_scope = f"{ticker}:{filing_id}:{llm_mode}:{cache_model}" if explicit_filing_id else f"{ticker}:{llm_mode}:{cache_model}"
 
     # ── Session answer cache hit ──────────────────────────────────────
     if sid and not is_comparison:
@@ -943,6 +952,7 @@ async def chat(
                 answer=cached,
                 sources=[],
                 model_used="cached",
+                llm_mode=llm_mode,
                 tokens_in=0,
                 tokens_out=0,
                 cost_usd=0.0,
@@ -1050,17 +1060,19 @@ async def chat(
             llm_result = await ask_llm(
                 request_body.question, context,
                 model=request_body.model,
+                llm_mode=llm_mode,
                 ticker=ticker,
                 history=history or None,
             )
     except Exception as e:
         logger.error("LLM call failed for ticker=%s: %s", ticker, e, exc_info=True)
-        raise HTTPException(502, "LLM call failed")
+        raise HTTPException(502, detail=f"LLM call failed: {e}")
 
     logger.info(
-        "Chat complete: ticker=%s session=%s model=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
+        "Chat complete: ticker=%s session=%s model=%s mode=%s tokens_in=%d tokens_out=%d cost=$%.6f latency=%.1fms",
         ticker, sid or "none",
         llm_result["model_used"],
+        llm_result.get("llm_mode", llm_mode),
         llm_result["tokens_in"],
         llm_result["tokens_out"],
         llm_result["cost_usd"],
@@ -1082,6 +1094,7 @@ async def chat(
         answer=llm_result["answer"],
         sources=sources,
         model_used=llm_result["model_used"],
+        llm_mode=llm_result.get("llm_mode", llm_mode),
         tokens_in=llm_result["tokens_in"],
         tokens_out=llm_result["tokens_out"],
         cost_usd=llm_result["cost_usd"],

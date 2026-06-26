@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from rag import graph_store
 
 
@@ -142,3 +144,72 @@ def test_retrieve_graph_revenue_prefers_financial_statement_over_policy(monkeypa
     results = graph_store.retrieve_graph(None, "upload-1", "Compare revenue", top_k=1)
 
     assert results[0]["chunk_index"] == 10
+
+
+def test_ingest_extracted_knowledge_adds_entity_relation_queries(monkeypatch):
+    driver = FakeDriver()
+    monkeypatch.setattr(graph_store, "_driver", lambda: driver)
+    monkeypatch.setattr(graph_store, "_database", lambda: "neo4j")
+
+    knowledge = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
+                id="entity:sandisk",
+                name="SanDisk",
+                type="company",
+                description="Storage company",
+                chunk_index=0,
+                properties={"name": "SanDisk"},
+            )
+        ],
+        relations=[
+            SimpleNamespace(
+                source="entity:sandisk",
+                target="entity:western digital",
+                type="acquired_by",
+                description="Acquisition relationship",
+                chunk_index=0,
+                properties={"source_name": "SanDisk", "target_name": "Western Digital"},
+            )
+        ],
+    )
+
+    graph_store.ingest_extracted_knowledge(None, "upload-1", knowledge)
+
+    assert any("HAS_ENTITY" in query for query in driver.state["queries"])
+    assert any("EXTRACTED_RELATION" in query for query in driver.state["queries"])
+    assert any("MENTIONS" in query for query in driver.state["queries"])
+
+
+def test_retrieve_graph_boosts_hyper_extract_entity_matches(monkeypatch):
+    driver = FakeDriver()
+    monkeypatch.setattr(graph_store, "_driver", lambda: driver)
+    monkeypatch.setattr(graph_store, "_database", lambda: "neo4j")
+
+    driver.state["exists"] = True
+    driver.state["chunks"] = [
+        {
+            "filing_id": "upload-1",
+            "chunk_index": 0,
+            "item": "DOCUMENT",
+            "section": "Document",
+            "text": "Generic financial discussion",
+            "entity_names": [],
+            "entity_types": [],
+            "relation_types": [],
+        },
+        {
+            "filing_id": "upload-1",
+            "chunk_index": 1,
+            "item": "DOCUMENT",
+            "section": "Document",
+            "text": "The transaction closed during the year.",
+            "entity_names": ["SanDisk", "Western Digital"],
+            "entity_types": ["company"],
+            "relation_types": ["acquired_by"],
+        },
+    ]
+
+    results = graph_store.retrieve_graph(None, "upload-1", "What happened to SanDisk?", top_k=1)
+
+    assert results[0]["chunk_index"] == 1

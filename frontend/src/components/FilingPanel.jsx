@@ -27,11 +27,27 @@ const MODELS = [
   { value: 'gpt-4o',             label: 'GPT-4o',           group: 'OpenAI' },
 ]
 
+const LLM_MODES = [
+  { value: 'cloud', label: 'Cloud', hint: 'Hosted models' },
+  { value: 'local', label: 'Local', hint: 'Runs on your Mac' },
+]
+
+const LOCAL_MODELS = [
+  { value: 'qwen3.5:0.8b', label: 'Qwen3.5 0.8B (recommended)' },
+  { value: 'microsoft/Phi-3.5-mini-instruct', label: 'Phi-3.5 Mini' },
+  { value: 'google/gemma-2-2b-it', label: 'Gemma 2 2B' },
+  { value: 'meta-llama/Llama-3.2-3B-Instruct', label: 'Llama 3.2 3B' },
+]
+
 export default function FilingPanel({ ticker, companyName, filingId, filing, fetchingFiling, sessionId }) {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState([])
   const [chatLoading, setChatLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('auto')
+  const [llmMode, setLlmMode] = useState(() => localStorage.getItem('finsight-llm-mode') || 'cloud')
+  const [selectedLocalModel, setSelectedLocalModel] = useState(
+    () => localStorage.getItem('finsight-local-model') || 'qwen3.5:0.8b',
+  )
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadType, setUploadType] = useState('10-K')
   const [uploading, setUploading] = useState(false)
@@ -69,6 +85,14 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
     setUploadError('')
     setUploadType('10-K')
   }, [ticker])
+
+  useEffect(() => {
+    localStorage.setItem('finsight-llm-mode', llmMode)
+  }, [llmMode])
+
+  useEffect(() => {
+    localStorage.setItem('finsight-local-model', selectedLocalModel)
+  }, [selectedLocalModel])
 
   useEffect(() => () => {
     audioRef.current?.pause()
@@ -123,7 +147,12 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
         question: text,
         ticker: ticker,
         filing_id: activeFilingId,
-        model: selectedModel === 'auto' ? null : selectedModel,
+        model: llmMode === 'local'
+          ? selectedLocalModel
+          : selectedModel === 'auto'
+            ? null
+            : selectedModel,
+        llm_mode: llmMode,
         session_id: sessionId ?? undefined,
       }, { headers })
       const cacheBadge = data.from_cache ? ' · cached' : ''
@@ -133,7 +162,7 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
         id: answerId,
         role: 'assistant',
         text: data.answer,
-        meta: `${data.model_used} · $${data.cost_usd.toFixed(4)} · ${Math.round(data.latency_ms)}ms${cacheBadge}${historyBadge}`,
+        meta: `${data.llm_mode === 'local' ? 'Local' : 'Cloud'} · ${data.model_used} · $${data.cost_usd.toFixed(4)} · ${Math.round(data.latency_ms)}ms${cacheBadge}${historyBadge}`,
       }])
       if (voiceResponses) void speakAnswer(data.answer, answerId)
     } catch (e) {
@@ -386,18 +415,60 @@ export default function FilingPanel({ ticker, companyName, filingId, filing, fet
               <div ref={bottomRef} />
             </div>
 
-            <div className="model-selector">
-              {MODELS.map(m => (
-                <button
-                  key={m.value}
-                  type="button"
-                  className={`model-pill${selectedModel === m.value ? ' model-pill-active' : ''}`}
-                  onClick={() => setSelectedModel(m.value)}
-                  title={`${m.group}: ${m.label}`}
-                >
-                  {m.label}
-                </button>
-              ))}
+            <div className="llm-bar">
+              <div className="llm-mode-switch" role="tablist" aria-label="LLM mode">
+                {LLM_MODES.map(mode => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={llmMode === mode.value}
+                    className={`llm-mode-pill${llmMode === mode.value ? ' llm-mode-pill-active' : ''}`}
+                    onClick={() => setLlmMode(mode.value)}
+                    title={mode.hint}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+
+              {llmMode === 'local' ? (
+                <label className="llm-model-field" htmlFor="local-model-select">
+                  <span>Local model</span>
+                  <select
+                    id="local-model-select"
+                    className="llm-model-select"
+                    value={selectedLocalModel}
+                    onChange={e => setSelectedLocalModel(e.target.value)}
+                  >
+                    {LOCAL_MODELS.map(model => (
+                      <option key={model.value} value={model.value}>{model.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label className="llm-model-field" htmlFor="cloud-model-select">
+                  <span>Cloud model</span>
+                  <select
+                    id="cloud-model-select"
+                    className="llm-model-select"
+                    value={selectedModel}
+                    onChange={e => setSelectedModel(e.target.value)}
+                  >
+                    {MODELS.map(model => (
+                      <option key={model.value} value={model.value}>
+                        {model.label}{model.group ? ` · ${model.group}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            <div className="llm-hint">
+              {llmMode === 'local'
+                ? 'Local mode uses Ollama and the selected local model.'
+                : 'Cloud mode uses Kimi first, then DeepSeek, with local as fallback.'}
             </div>
 
             <form onSubmit={handleSubmit} className="chat-form">

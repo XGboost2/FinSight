@@ -77,8 +77,10 @@ def _route_items(question: str) -> set[str]:
 
 def _ensure_schema(tx) -> None:
     tx.run("CREATE CONSTRAINT finsight_document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.filing_id IS UNIQUE")
+    tx.run("CREATE CONSTRAINT finsight_entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE (e.filing_id, e.entity_id) IS UNIQUE")
     tx.run("CREATE INDEX finsight_section_id IF NOT EXISTS FOR (s:Section) ON (s.filing_id, s.section_id)")
     tx.run("CREATE INDEX finsight_chunk_id IF NOT EXISTS FOR (c:Chunk) ON (c.filing_id, c.chunk_index)")
+    tx.run("CREATE INDEX finsight_entity_name IF NOT EXISTS FOR (e:Entity) ON (e.filing_id, e.name)")
 
 
 def _clear_document(tx, filing_id: str) -> None:
@@ -87,7 +89,8 @@ def _clear_document(tx, filing_id: str) -> None:
         MATCH (d:Document {filing_id: $filing_id})
         OPTIONAL MATCH (d)-[:HAS_SECTION]->(s:Section)
         OPTIONAL MATCH (s)-[:HAS_CHUNK]->(c:Chunk)
-        WITH collect(DISTINCT d) + collect(DISTINCT s) + collect(DISTINCT c) AS nodes
+        OPTIONAL MATCH (d)-[:HAS_ENTITY]->(e:Entity)
+        WITH collect(DISTINCT d) + collect(DISTINCT s) + collect(DISTINCT c) + collect(DISTINCT e) AS nodes
         UNWIND nodes AS n
         WITH n WHERE n IS NOT NULL
         DETACH DELETE n
@@ -162,10 +165,98 @@ def _create_document_graph(tx, filing_id: str, metadata: dict, chunks: list[dict
         )
 
 
+def _create_extracted_knowledge(tx, filing_id: str, knowledge: Any) -> None:
+    entities = [
+        {
+            "entity_id": entity.id,
+            "filing_id": filing_id,
+            "name": entity.name,
+            "type": entity.type,
+            "description": entity.description,
+            "chunk_index": entity.chunk_index,
+            **{f"he_{key}": value for key, value in entity.properties.items()},
+        }
+        for entity in getattr(knowledge, "entities", [])
+        if getattr(entity, "id", "") and getattr(entity, "name", "")
+    ]
+    relations = [
+        {
+            "source_id": relation.source,
+            "target_id": relation.target,
+            "source_name": relation.properties.get("source_name", relation.source.removeprefix("entity:")),
+            "target_name": relation.properties.get("target_name", relation.target.removeprefix("entity:")),
+            "filing_id": filing_id,
+            "relation_type": relation.type,
+            "description": relation.description,
+            "chunk_index": relation.chunk_index,
+            **{f"he_{key}": value for key, value in relation.properties.items()},
+        }
+        for relation in getattr(knowledge, "relations", [])
+        if getattr(relation, "source", "") and getattr(relation, "target", "")
+    ]
+
+    for entity in entities:
+        tx.run(
+            """
+            MATCH (d:Document {filing_id: $filing_id})
+            MERGE (e:Entity {filing_id: $filing_id, entity_id: $entity_id})
+            SET e += $entity
+            MERGE (d)-[:HAS_ENTITY]->(e)
+            WITH e
+            OPTIONAL MATCH (c:Chunk {filing_id: $filing_id, chunk_index: $chunk_index})
+            FOREACH (_ IN CASE WHEN c IS NULL THEN [] ELSE [1] END |
+                MERGE (c)-[:MENTIONS]->(e)
+            )
+            """,
+            filing_id=filing_id,
+            entity_id=entity["entity_id"],
+            chunk_index=entity["chunk_index"],
+            entity=entity,
+        )
+
+    for relation in relations:
+        tx.run(
+            """
+            MERGE (source:Entity {filing_id: $filing_id, entity_id: $source_id})
+            ON CREATE SET source.name = $source_name, source.type = '', source.description = ''
+            MERGE (target:Entity {filing_id: $filing_id, entity_id: $target_id})
+            ON CREATE SET target.name = $target_name, target.type = '', target.description = ''
+            SET source.filing_id = $filing_id,
+                target.filing_id = $filing_id
+            WITH source, target
+            MATCH (d:Document {filing_id: $filing_id})
+            MERGE (d)-[:HAS_ENTITY]->(source)
+            MERGE (d)-[:HAS_ENTITY]->(target)
+            MERGE (source)-[r:EXTRACTED_RELATION {
+                filing_id: $filing_id,
+                relation_type: $relation_type,
+                target_id: $target_id
+            }]->(target)
+            SET r += $relation
+            WITH source, target
+            OPTIONAL MATCH (c:Chunk {filing_id: $filing_id, chunk_index: $chunk_index})
+            FOREACH (_ IN CASE WHEN c IS NULL THEN [] ELSE [1] END |
+                MERGE (c)-[:MENTIONS]->(source)
+                MERGE (c)-[:MENTIONS]->(target)
+            )
+            """,
+            filing_id=filing_id,
+            source_id=relation["source_id"],
+            target_id=relation["target_id"],
+            source_name=relation["source_name"],
+            target_name=relation["target_name"],
+            relation_type=relation["relation_type"],
+            chunk_index=relation["chunk_index"],
+            relation=relation,
+        )
+
+
 def _read_chunks(tx, filing_id: str) -> list[dict]:
     result = tx.run(
         """
         MATCH (:Document {filing_id: $filing_id})-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(c:Chunk)
+        OPTIONAL MATCH (c)-[:MENTIONS]->(e:Entity)
+        OPTIONAL MATCH (e)-[r:EXTRACTED_RELATION]-(related:Entity)
         RETURN c.filing_id AS filing_id,
                c.chunk_index AS chunk_index,
                c.text AS text,
@@ -175,7 +266,10 @@ def _read_chunks(tx, filing_id: str) -> list[dict]:
                c.pageindex_section AS pageindex_section,
                c.pageindex_level AS pageindex_level,
                c.char_start AS char_start,
-               c.char_end AS char_end
+               c.char_end AS char_end,
+               collect(DISTINCT e.name) AS entity_names,
+               collect(DISTINCT e.type) AS entity_types,
+               collect(DISTINCT r.relation_type) AS relation_types
         ORDER BY c.chunk_index ASC
         """,
         filing_id=filing_id,
@@ -211,6 +305,27 @@ def ingest_graph_document(_redis_unused: Any, filing_id: str, metadata: dict, ch
     logger.info("Neo4j graph ingest complete: filing_id=%s chunks=%d", filing_id, len(chunks))
 
 
+def ingest_extracted_knowledge(_redis_unused: Any, filing_id: str, knowledge: Any | None) -> None:
+    """Add Hyper-Extract entities and relations to an existing document graph."""
+    if not knowledge:
+        return
+    entity_count = len(getattr(knowledge, "entities", []) or [])
+    relation_count = len(getattr(knowledge, "relations", []) or [])
+    if not entity_count and not relation_count:
+        return
+
+    with _driver().session(database=_database()) as session:
+        session.execute_write(_ensure_schema)
+        session.execute_write(_create_extracted_knowledge, filing_id, knowledge)
+
+    logger.info(
+        "Neo4j Hyper-Extract enrichment complete: filing_id=%s entities=%d relations=%d",
+        filing_id,
+        entity_count,
+        relation_count,
+    )
+
+
 def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
     query_terms = _tokens(question)
     if not query_terms:
@@ -224,7 +339,13 @@ def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
     chunk_tokens: list[tuple[dict, Counter[str]]] = []
 
     for chunk in chunks:
-        text = f"{chunk.get('item', '')} {chunk.get('section', '')} {chunk.get('text', '')}"
+        graph_terms = " ".join(
+            str(value)
+            for key in ("entity_names", "entity_types", "relation_types")
+            for value in (chunk.get(key) or [])
+            if value
+        )
+        text = f"{chunk.get('item', '')} {chunk.get('section', '')} {graph_terms} {chunk.get('text', '')}"
         counts = Counter(_tokens(text))
         chunk_tokens.append((chunk, counts))
         for term in set(counts):
@@ -249,6 +370,12 @@ def _score_chunks(chunks: list[dict], question: str, top_k: int) -> list[dict]:
                 score += 6.0
             if _REVENUE_POLICY_RE.search(chunk_text):
                 score -= 5.0
+        entity_terms = set(_tokens(" ".join(chunk.get("entity_names") or [])))
+        relation_terms = set(_tokens(" ".join(chunk.get("relation_types") or [])))
+        if entity_terms.intersection(query_counts):
+            score += 3.0
+        if relation_terms.intersection(query_counts):
+            score += 2.0
         if score > 0:
             scored.append((score, chunk))
 

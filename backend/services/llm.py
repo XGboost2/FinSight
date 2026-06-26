@@ -71,6 +71,8 @@ _PRICING: dict[str, dict[str, float]] = {
 
 
 def _provider(model: str) -> str:
+    if model.startswith("local:"):
+        return "local"
     if model.startswith("kimi") or model.startswith("moonshot"):
         return "kimi"
     if model.startswith("deepseek"):
@@ -134,6 +136,24 @@ def _provider_has_key(provider: str, settings: Any) -> bool:
     return False
 
 
+def _local_base_urls(settings: Any) -> list[str]:
+    """Try both Docker-host and native-host Ollama endpoints automatically."""
+    base_urls = [settings.LOCAL_LLM_BASE_URL]
+    for candidate in (
+        "http://host.docker.internal:11434/v1",
+        "http://localhost:11434/v1",
+    ):
+        if candidate not in base_urls:
+            base_urls.append(candidate)
+    return base_urls
+
+
+def _normalize_local_model_name(model: str | None, settings: Any) -> str:
+    """Return a bare local model name without a local: prefix."""
+    candidate = (model or settings.LOCAL_LLM_MODEL).strip()
+    return candidate.removeprefix("local:")
+
+
 def _chat_message_text(message: Any) -> str:
     """Extract text from OpenAI-compatible chat messages across providers."""
     content = getattr(message, "content", None)
@@ -173,13 +193,20 @@ async def _call_provider(
         return await _call_anthropic(user_message, model, settings, conversation)
     if provider == "openai":
         return await _call_openai(user_message, model, settings, conversation)
+    if provider == "local":
+        return await _call_local(user_message, model, settings, conversation)
     raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
 
-def _fallback_models(primary_model: str, settings: Any) -> list[str]:
+def _fallback_models(primary_model: str, settings: Any, route_mode: str) -> list[str]:
+    if route_mode == "local":
+        candidate = _normalize_local_model_name(primary_model, settings)
+        return [f"local:{candidate}"]
+
     candidates = [
         primary_model,
         CHEAP_FALLBACK,
+        f"local:{settings.LOCAL_LLM_MODEL}",
         "claude-haiku-4-5",
         "gpt-4o-mini",
         CHEAP_MODEL,
@@ -188,7 +215,8 @@ def _fallback_models(primary_model: str, settings: Any) -> list[str]:
     for candidate in candidates:
         if candidate in models:
             continue
-        if _provider_has_key(_provider(candidate), settings):
+        provider = _provider(candidate)
+        if provider == "local" or _provider_has_key(provider, settings):
             models.append(candidate)
     return models
 
@@ -198,6 +226,7 @@ async def ask_llm(
     query: str,
     context: str,
     model: str | None = None,
+    llm_mode: str = "cloud",
     ticker: str | None = None,
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
@@ -227,14 +256,18 @@ Question: {query}"""
     # Build messages array: system → valid history turns → current question.
     conversation = _sanitize_conversation(history, user_message)
 
-    routed_model = model or _route_model(query)
+    route_mode = llm_mode if llm_mode in {"cloud", "local"} else "cloud"
+    routed_model = model or (_route_model(query) if route_mode == "cloud" else "")
+    if route_mode == "local":
+        routed_model = f"local:{_normalize_local_model_name(routed_model, settings)}"
+
     provider = _provider(routed_model)
     logger.info("Model router: query_len=%d history=%d → %s (%s)",
                 len(query), len(history or []), routed_model, provider)
 
     result: dict[str, Any] | None = None
     failures: list[str] = []
-    for candidate_model in _fallback_models(routed_model, settings):
+    for candidate_model in _fallback_models(routed_model, settings, route_mode):
         candidate_provider = _provider(candidate_model)
         try:
             candidate = await _call_provider(
@@ -262,6 +295,9 @@ Question: {query}"""
         break
 
     if result is None:
+        if route_mode == "local":
+            detail = " | ".join(failures) if failures else settings.LOCAL_LLM_BASE_URL
+            raise RuntimeError(f"Local LLM unavailable for model {routed_model}. Tried: {detail}")
         if failures:
             logger.error("All configured LLM providers failed or returned empty output: %s", " | ".join(failures))
         else:
@@ -270,6 +306,7 @@ Question: {query}"""
 
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     result["latency_ms"] = elapsed_ms
+    result["llm_mode"] = route_mode
 
     # Log per coding standards
     logger.info(
@@ -519,6 +556,52 @@ async def _call_openai(
         "tokens_out": tokens_out,
         "cost_usd": _calc_cost(model, tokens_in, tokens_out),
     }
+
+
+async def _call_local(
+    user_message: str,
+    model: str,
+    settings: Any,
+    conversation: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Call a local OpenAI-compatible server, typically Ollama or LM Studio."""
+    from openai import AsyncOpenAI
+
+    local_model = model.removeprefix("local:") or settings.LOCAL_LLM_MODEL
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += conversation or [{"role": "user", "content": user_message}]
+
+    failures: list[str] = []
+    for base_url in _local_base_urls(settings):
+        client = AsyncOpenAI(
+            api_key=settings.LOCAL_LLM_API_KEY or "local",
+            base_url=base_url,
+        )
+        try:
+            response = await client.chat.completions.create(
+                model=local_model,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                messages=messages,
+            )
+        except Exception as exc:
+            failures.append(f"{base_url}: {exc}")
+            continue
+
+        usage = response.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+
+        return {
+            "answer": _chat_message_text(response.choices[0].message),
+            "model_used": local_model,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cost_usd": 0.0,
+        }
+
+    raise RuntimeError(
+        f"Local LLM unavailable for model {local_model}. Tried: {', '.join(failures) or settings.LOCAL_LLM_BASE_URL}"
+    )
 
 
 def _mock_response(query: str) -> dict[str, Any]:
